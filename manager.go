@@ -39,8 +39,8 @@ type ClusterRequest struct {
 	RequestedAt time.Time
 	Name        string
 
-	JobName   string
-	JobParams map[string]string
+	JobName string
+	Params  map[string]string
 }
 
 // JobManager responds to user actions and tracks the state of the launched
@@ -72,7 +72,7 @@ type Job struct {
 	Ready   bool
 	JobName string
 
-	JobParams map[string]string
+	Params map[string]string
 
 	Mode string
 
@@ -153,6 +153,29 @@ func (m *jobManager) Start() error {
 	return nil
 }
 
+func paramsFromAnnotation(value string) (map[string]string, error) {
+	values := make(map[string]string)
+	if len(value) == 0 {
+		return values, nil
+	}
+	for _, part := range strings.Split(value, ",") {
+		if len(part) == 0 {
+			return nil, fmt.Errorf("parameter may not be empty")
+		}
+		parts := strings.SplitN(part, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		if len(key) == 0 {
+			return nil, fmt.Errorf("parameter name may not be empty")
+		}
+		if len(parts) == 1 {
+			values[key] = ""
+			continue
+		}
+		values[key] = parts[1]
+	}
+	return values, nil
+}
+
 func paramsToString(params map[string]string) string {
 	var pairs []string
 	for k, v := range params {
@@ -206,6 +229,13 @@ func (m *jobManager) sync() error {
 			RequestedAt:      cluster.CreationTimestamp.Time,
 		}
 
+		var err error
+		j.Params, err = paramsFromAnnotation(cluster.Annotations["crc-cluster-bot.openshift.io/params"])
+		if err != nil {
+			klog.Infof("Unable to unmarshal parameters from %s: %v", cluster.Name, err)
+			continue
+		}
+
 		if expirationString := cluster.Annotations["crc-cluster-bot.openshift.io/expires"]; len(expirationString) > 0 {
 			if maxSeconds, err := strconv.Atoi(expirationString); err == nil && maxSeconds > 0 {
 				j.ExpiresAt = cluster.CreationTimestamp.Add(time.Duration(maxSeconds) * time.Second)
@@ -228,11 +258,17 @@ func (m *jobManager) sync() error {
 
 		if user := j.RequestedBy; len(user) > 0 {
 			if _, ok := m.requests[user]; !ok {
+				params, err := paramsFromAnnotation(cluster.Annotations["crc-cluster-bot.openshift.io/params"])
+				if err != nil {
+					klog.Infof("Unable to unmarshal parameters from %s: %v", cluster.Name, err)
+					continue
+				}
 				m.requests[user] = &ClusterRequest{
 					OriginalMessage: cluster.Annotations["crc-cluster-bot.openshift.io/originalMessage"],
 
 					User:        user,
 					Name:        cluster.Name,
+					Params:      params,
 					RequestedAt: cluster.CreationTimestamp.Time,
 					Channel:     cluster.Annotations["crc-cluster-bot.openshift.io/channel"],
 				}
@@ -278,13 +314,13 @@ func (m *jobManager) SetNotifier(fn JobCallbackFunc) {
 }
 
 func (m *jobManager) estimateCompletion(requestedAt time.Time) time.Duration {
-	// find the median, or default to 30m
+	// find the median, or default to 15m
 	var median time.Duration
 	if l := len(m.recentStartEstimates); l > 0 {
 		median = m.recentStartEstimates[l/2]
 	}
 	if median < time.Minute {
-		median = 10 * time.Minute
+		median = 15 * time.Minute
 	}
 
 	if requestedAt.IsZero() {
@@ -296,6 +332,15 @@ func (m *jobManager) estimateCompletion(requestedAt time.Time) time.Duration {
 		return time.Minute
 	}
 	return lastEstimate.Truncate(time.Second)
+}
+
+func contains(arr []string, s string) bool {
+	for _, item := range arr {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *jobManager) ListClusters(users ...string) string {
@@ -326,7 +371,17 @@ func (m *jobManager) ListClusters(users ...string) string {
 		fmt.Fprintf(buf, "%d/%d clusters up (start time is approximately %d minutes):\n\n", runningClusters, m.maxClusters, m.estimateCompletion(time.Time{})/time.Minute)
 		for _, cluster := range clusters {
 			var details string
+
+			// summarize the job parameters
 			var options string
+			params := make(map[string]string)
+			for k, v := range cluster.Params {
+				params[k] = v
+			}
+			if s := paramsToString(params); len(s) > 0 {
+				options = fmt.Sprintf(" (%s)", s)
+			}
+
 			bundle := cluster.Bundle
 			switch {
 			case cluster.Complete:
@@ -417,8 +472,8 @@ func (m *jobManager) resolveToCluster(req *ClusterRequest) (*Job, error) {
 		OriginalMessage: req.OriginalMessage,
 		Name:            name,
 
-		Bundle:    req.Bundle,
-		JobParams: req.JobParams,
+		Bundle: req.Bundle,
+		Params: req.Params,
 
 		RequestedBy:      user,
 		RequestedChannel: req.Channel,
@@ -436,7 +491,7 @@ func (m *jobManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
 		return "", err
 	}
 
-	klog.Infof("Cluster %q requested by user %q - params=%s", cluster.Name, req.User, paramsToString(cluster.JobParams))
+	klog.Infof("Cluster %q requested by user %q - params=%s", cluster.Name, req.User, paramsToString(cluster.Params))
 
 	msg, err := func() (string, error) {
 		m.lock.Lock()

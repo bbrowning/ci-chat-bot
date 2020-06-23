@@ -36,10 +36,10 @@ func (b *Bot) Start(manager JobManager) error {
 	if err != nil {
 		return err
 	}
-	slack.Command("launch <bundle>", &slacker.CommandDefinition{
+	slack.Command("launch <bundle> <options>", &slacker.CommandDefinition{
 		Description: fmt.Sprintf(
-			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s.", strings.Join(validBundles, ", ")),
-		Example: fmt.Sprintf("launch %s", validBundles[0]),
+			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations limited to 'persistent' today that will enable persistence for your cluster, allowing it to survive stops and starts.", strings.Join(validBundles, ", ")),
+		Example: fmt.Sprintf("launch %s persistent", validBundles[0]),
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User
 			channel := request.Event().Channel
@@ -54,11 +54,18 @@ func (b *Bot) Start(manager JobManager) error {
 				return
 			}
 
+			params, err := parseOptions(request.StringParam("options", ""))
+			if err != nil {
+				response.Reply(err.Error())
+				return
+			}
+
 			msg, err := manager.LaunchClusterForUser(&ClusterRequest{
 				OriginalMessage: stripLinks(request.Event().Text),
 				User:            user,
 				Bundle:          bundle,
 				Channel:         channel,
+				Params:          params,
 			})
 			if err != nil {
 				response.Reply(err.Error())
@@ -269,4 +276,22 @@ func stripLinks(input string) string {
 		input = input[open+close+1:]
 	}
 	return b.String()
+}
+
+func parseOptions(options string) (map[string]string, error) {
+	params, err := paramsFromAnnotation(options)
+	if err != nil {
+		return nil, fmt.Errorf("options could not be parsed: %v", err)
+	}
+	for opt := range params {
+		switch {
+		case opt == "":
+			delete(params, opt)
+		case contains(supportedParameters, opt):
+			// do nothing
+		default:
+			return nil, fmt.Errorf("unrecognized option: %s", opt)
+		}
+	}
+	return params, nil
 }

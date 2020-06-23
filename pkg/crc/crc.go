@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func ClusterForConfig(bundleName string, pullSecret string) (*crcv1alpha1.CrcCluster, error) {
+func ClusterForConfig(bundleName string, pullSecret string, params map[string]string) (*crcv1alpha1.CrcCluster, error) {
 
 	crc := &crcv1alpha1.CrcCluster{
 		TypeMeta: metav1.TypeMeta{APIVersion: "crc.developer.openshift.io/v1alpha1", Kind: "CrcCluster"},
@@ -20,6 +20,18 @@ func ClusterForConfig(bundleName string, pullSecret string) (*crcv1alpha1.CrcClu
 			PullSecret: base64.StdEncoding.EncodeToString([]byte(pullSecret)),
 			BundleName: bundleName,
 		},
+	}
+
+	for opt := range params {
+		switch {
+		case opt == "persistent":
+			crc.Spec.Storage = crcv1alpha1.CrcStorageSpec{
+				Persistent: true,
+				Size:       "50Gi",
+			}
+		default:
+			// ignore
+		}
 	}
 	crc = crc.DeepCopy()
 	return crc, nil

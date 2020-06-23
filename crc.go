@@ -19,6 +19,9 @@ import (
 	"k8s.io/klog"
 )
 
+// supportedParameters are the allowed parameter keys that can be passed to clusters
+var supportedParameters = []string{"persistent"}
+
 // stopCluster triggers cluster deletion. If this method returns nil, it
 // is safe to consider the cluster released.
 func (m *jobManager) stopCluster(name string) error {
@@ -42,7 +45,7 @@ func (m *jobManager) newCluster(cluster *Job) error {
 
 	launchDeadline := 20 * time.Minute
 
-	crcCluster, err := crc.ClusterForConfig(cluster.Bundle, m.pullSecret)
+	crcCluster, err := crc.ClusterForConfig(cluster.Bundle, m.pullSecret, cluster.Params)
 	if err != nil {
 		return err
 	}
@@ -52,7 +55,7 @@ func (m *jobManager) newCluster(cluster *Job) error {
 		Namespace: m.crcClusterNamespace,
 		Annotations: map[string]string{
 			"crc-cluster-bot.openshift.io/originalMessage": cluster.OriginalMessage,
-			"crc-cluster-bot.openshift.io/jobParams":       paramsToString(cluster.JobParams),
+			"crc-cluster-bot.openshift.io/params":          paramsToString(cluster.Params),
 			"crc-cluster-bot.openshift.io/user":            cluster.RequestedBy,
 			"crc-cluster-bot.openshift.io/channel":         cluster.RequestedChannel,
 		},
