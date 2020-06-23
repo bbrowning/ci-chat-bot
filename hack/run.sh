@@ -14,9 +14,6 @@ kubectl --kubeconfig=$tmp_kk config use-context api.ci
 kubectl config use-context app.ci
 cd $(dirname $0)/..
 make
-./ci-chat-bot \
-  --force-pr-owner=system:serviceaccount:ci:ci-chat-bot \
-  --job-config ../release/ci-operator/jobs/openshift/release/ \
-  --prow-config ../release/core-services/prow/02_config/_config.yaml \
+./crc-cluster-bot \
   --build-cluster-kubeconfig=$tmp_kk \
   --v=2

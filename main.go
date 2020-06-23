@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"time"
 
@@ -12,21 +11,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
-
-	prowapiv1 "github.com/openshift/ci-chat-bot/pkg/prow/apiv1"
-	imageclientset "github.com/openshift/client-go/image/clientset/versioned"
-	projectclientset "github.com/openshift/client-go/project/clientset/versioned"
 )
 
 type options struct {
-	ProwConfigPath         string
-	JobConfigPath          string
-	GithubEndpoint         string
-	ForcePROwner           string
-	BuildClusterKubeconfig string
-	ConfigResolver         string
 }
 
 func main() {
@@ -38,63 +26,32 @@ func main() {
 func run() error {
 	emptyFlags := flag.NewFlagSet("empty", flag.ContinueOnError)
 	klog.InitFlags(emptyFlags)
-	opt := &options{
-		GithubEndpoint: "https://api.github.com",
-		ConfigResolver: "http://ci-operator-configresolver.ci.svc/config",
-	}
-	pflag.StringVar(&opt.ConfigResolver, "config-resolver", opt.ConfigResolver, "A URL pointing to a config resolver for retrieving ci-operator config. You may pass a location on disk with file://<abs_path_to_ci_operator_config>")
-	pflag.StringVar(&opt.ProwConfigPath, "prow-config", opt.ProwConfigPath, "A config file containing the prow configuration.")
-	pflag.StringVar(&opt.JobConfigPath, "job-config", opt.JobConfigPath, "A config file containing the jobs to run against releases.")
-	pflag.StringVar(&opt.GithubEndpoint, "github-endpoint", opt.GithubEndpoint, "An optional proxy for connecting to github.")
-	pflag.StringVar(&opt.ForcePROwner, "force-pr-owner", opt.ForcePROwner, "Make the supplied user the owner of all PRs for access control purposes.")
-	pflag.StringVar(&opt.BuildClusterKubeconfig, "build-cluster-kubeconfig", "", "Kubeconfig to use for buildcluster. Defaults to normal kubeconfig if unset.")
 	pflag.CommandLine.AddGoFlag(emptyFlags.Lookup("v"))
 	pflag.Parse()
 	klog.SetOutput(os.Stderr)
-
-	resolverURL, err := url.Parse(opt.ConfigResolver)
-	if err != nil {
-		return fmt.Errorf("--config-resolver is not a valid URL: %v", err)
-	}
-	resolver := &URLConfigResolver{URL: resolverURL}
 
 	botToken := os.Getenv("BOT_TOKEN")
 	if len(botToken) == 0 {
 		return fmt.Errorf("the environment variable BOT_TOKEN must be set")
 	}
 
-	prowJobKubeconfig, _, _, err := loadKubeconfig()
+	pullSecret := os.Getenv("OPENSHIFT_PULL_SECRET")
+	if len(pullSecret) == 0 {
+		return fmt.Errorf("the environment variable OPENSHIFT_PULL_SECRET must be set")
+	}
+
+	crcKubeconfig, _, _, err := loadKubeconfig()
 	if err != nil {
 		return err
 	}
-	config, err := loadKubeconfigFromFlagOrDefault(opt.BuildClusterKubeconfig, prowJobKubeconfig)
+	dynamicClient, err := dynamic.NewForConfig(crcKubeconfig)
 	if err != nil {
-		return fmt.Errorf("failed to load prowjob kubeconfig: %w", err)
+		return fmt.Errorf("unable to create crc client: %v", err)
 	}
-	dynamicClient, err := dynamic.NewForConfig(prowJobKubeconfig)
-	if err != nil {
-		return fmt.Errorf("unable to create prow client: %v", err)
-	}
-	prowClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "prow.k8s.io", Version: "v1", Resource: "prowjobs"})
-	client, err := clientset.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("unable to create client: %v", err)
-	}
-	imageClient, err := imageclientset.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("unable to create client: %v", err)
-	}
-	projectClient, err := projectclientset.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("unable to create client: %v", err)
-	}
+	crcBundleClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "crc.developer.openshift.io", Version: "v1alpha1", Resource: "crcbundles"})
+	crcClusterClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "crc.developer.openshift.io", Version: "v1alpha1", Resource: "crcclusters"})
 
-	configAgent := &prowapiv1.Agent{}
-	if err := configAgent.Start(opt.ProwConfigPath, opt.JobConfigPath); err != nil {
-		return err
-	}
-
-	manager := NewJobManager(configAgent, resolver, prowClient, client, imageClient, projectClient, config, opt.GithubEndpoint, opt.ForcePROwner)
+	manager := NewJobManager(pullSecret, crcBundleClient, crcClusterClient)
 	if err := manager.Start(); err != nil {
 		return fmt.Errorf("unable to load initial configuration: %v", err)
 	}
@@ -102,6 +59,7 @@ func run() error {
 	bot := NewBot(botToken)
 	for {
 		if err := bot.Start(manager); err != nil && !isRetriable(err) {
+			log.Print(err)
 			return err
 		}
 		time.Sleep(5 * time.Second)

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	prowapiv1 "github.com/openshift/ci-chat-bot/pkg/prow/apiv1"
 	"github.com/shomali11/slacker"
 	"github.com/slack-go/slack"
 	"k8s.io/client-go/pkg/version"
@@ -33,13 +32,14 @@ func (b *Bot) Start(manager JobManager) error {
 		response.Reply("unrecognized command, msg me `help` for a list of all commands")
 	})
 
-	slack.Command("launch <image_or_version_or_pr> <options>", &slacker.CommandDefinition{
+	validBundles, err := manager.ListBundles()
+	if err != nil {
+		return err
+	}
+	slack.Command("launch <bundle>", &slacker.CommandDefinition{
 		Description: fmt.Sprintf(
-			"Launch an OpenShift cluster using a known image, version, or PR. You may omit both arguments. Use `nightly` for the latest OCP build, `ci` for the the latest CI build, provide a version directly from any listed on https://openshift-release.svc.ci.openshift.org, a stream name (4.1.0-0.ci, 4.1.0-0.nightly, etc), a major/minor `X.Y` to load the latest stable version for that version (`4.1`), `<org>/<repo>#<pr>` to launch from a PR, or an image for the first argument. Options is a comma-delimited list of variations including platform (%s) and variant (%s).",
-			strings.Join(codeSlice(supportedPlatforms), ", "),
-			strings.Join(codeSlice(supportedParameters), ", "),
-		),
-		Example: "launch openshift/origin#49563 gcp",
+			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s.", strings.Join(validBundles, ", ")),
+		Example: fmt.Sprintf("launch %s", validBundles[0]),
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User
 			channel := request.Event().Channel
@@ -48,34 +48,17 @@ func (b *Bot) Start(manager JobManager) error {
 				return
 			}
 
-			from, err := parseImageInput(request.StringParam("image_or_version_or_pr", ""))
+			bundle, err := parseBundleName(request.StringParam("bundle", ""))
 			if err != nil {
 				response.Reply(err.Error())
 				return
 			}
-			var inputs [][]string
-			if len(from) > 0 {
-				inputs = [][]string{from}
-			}
 
-			platform, params, err := parseOptions(request.StringParam("options", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			if len(params["test"]) > 0 {
-				response.Reply("Test arguments may not be passed from the launch command")
-				return
-			}
-
-			msg, err := manager.LaunchJobForUser(&JobRequest{
+			msg, err := manager.LaunchClusterForUser(&ClusterRequest{
 				OriginalMessage: stripLinks(request.Event().Text),
 				User:            user,
-				Inputs:          inputs,
-				Type:            JobTypeInstall,
+				Bundle:          bundle,
 				Channel:         channel,
-				Platform:        platform,
-				JobParams:       params,
 			})
 			if err != nil {
 				response.Reply(err.Error())
@@ -85,15 +68,15 @@ func (b *Bot) Start(manager JobManager) error {
 		},
 	})
 
-	slack.Command("lookup <image_or_version_or_pr>", &slacker.CommandDefinition{
-		Description: "Get info about a version.",
+	slack.Command("lookup <bundle>", &slacker.CommandDefinition{
+		Description: "Get info about a bundle.",
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
-			from, err := parseImageInput(request.StringParam("image_or_version_or_pr", ""))
+			bundle, err := parseBundleName(request.StringParam("bundle", ""))
 			if err != nil {
 				response.Reply(err.Error())
 				return
 			}
-			msg, err := manager.LookupInputs(from)
+			msg, err := manager.LookupBundle(bundle)
 			if err != nil {
 				response.Reply(err.Error())
 				return
@@ -104,7 +87,7 @@ func (b *Bot) Start(manager JobManager) error {
 	slack.Command("list", &slacker.CommandDefinition{
 		Description: "See who is hogging all the clusters.",
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
-			response.Reply(manager.ListJobs(request.Event().User))
+			response.Reply(manager.ListClusters(request.Event().User))
 		},
 	})
 	slack.Command("refresh", &slacker.CommandDefinition{
@@ -116,7 +99,7 @@ func (b *Bot) Start(manager JobManager) error {
 				response.Reply("you must direct message me this request")
 				return
 			}
-			msg, err := manager.SyncJobForUser(user)
+			msg, err := manager.SyncClusterForUser(user)
 			if err != nil {
 				response.Reply(err.Error())
 				return
@@ -133,7 +116,7 @@ func (b *Bot) Start(manager JobManager) error {
 				response.Reply("you must direct message me this request")
 				return
 			}
-			msg, err := manager.TerminateJobForUser(user)
+			msg, err := manager.TerminateClusterForUser(user)
 			if err != nil {
 				response.Reply(err.Error())
 				return
@@ -151,186 +134,24 @@ func (b *Bot) Start(manager JobManager) error {
 				response.Reply("you must direct message me this request")
 				return
 			}
-			job, err := manager.GetLaunchJob(user)
+			job, err := manager.GetLaunchCluster(user)
 			if err != nil {
 				response.Reply(err.Error())
 				return
 			}
 			job.RequestedChannel = channel
-			b.notifyJob(slacker.NewResponse(request.Event(), slack.Client(), slack.RTM()), job)
-		},
-	})
-
-	slack.Command("test upgrade <from> <to> <options>", &slacker.CommandDefinition{
-		Description: fmt.Sprintf("Run the upgrade tests between two release images. The arguments may be a pull spec of a release image or tags from https://openshift-release.svc.ci.openshift.org. You may change the upgrade test by passing `test=NAME` in options with one of %s", strings.Join(codeSlice(supportedUpgradeTests), ", ")),
-		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
-			user := request.Event().User
-			channel := request.Event().Channel
-			if !isDirectMessage(channel) {
-				response.Reply("this command is only accepted via direct message")
-				return
-			}
-
-			from, err := parseImageInput(request.StringParam("from", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			if len(from) == 0 {
-				response.Reply("you must specify an image to upgrade from and to")
-				return
-			}
-			to, err := parseImageInput(request.StringParam("to", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			// default to to from
-			if len(to) == 0 {
-				to = from
-			}
-
-			platform, params, err := parseOptions(request.StringParam("options", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-
-			if v := params["test"]; len(v) == 0 {
-				params["test"] = "e2e-upgrade"
-			}
-			if !strings.Contains(params["test"], "-upgrade") {
-				response.Reply("Only upgrade type tests may be run from this command")
-				return
-			}
-
-			msg, err := manager.LaunchJobForUser(&JobRequest{
-				OriginalMessage: stripLinks(request.Event().Text),
-				User:            user,
-				Inputs:          [][]string{from, to},
-				Type:            JobTypeUpgrade,
-				Channel:         channel,
-				Platform:        platform,
-				JobParams:       params,
-			})
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			response.Reply(msg)
-		},
-	})
-
-	slack.Command("test <name> <image_or_version_or_pr> <options>", &slacker.CommandDefinition{
-		Description: fmt.Sprintf("Run the requested test suite from an image or release or built PRs. Supported test suites are %s. The from argument may be a pull spec of a release image or tags from https://openshift-release.svc.ci.openshift.org.", strings.Join(codeSlice(supportedTests), ", ")),
-		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
-			user := request.Event().User
-			channel := request.Event().Channel
-			if !isDirectMessage(channel) {
-				response.Reply("this command is only accepted via direct message")
-				return
-			}
-
-			from, err := parseImageInput(request.StringParam("image_or_version_or_pr", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			if len(from) == 0 {
-				response.Reply("you must specify what will be tested")
-				return
-			}
-
-			test := request.StringParam("name", "")
-			if len(test) == 0 {
-				response.Reply(fmt.Sprintf("you must specify the name of a test: %s", strings.Join(codeSlice(supportedTests), ", ")))
-			}
-			switch {
-			case contains(supportedTests, test):
-			default:
-				response.Reply(fmt.Sprintf("warning: You are using a custom test name, may not be supported for all platforms: %s", strings.Join(codeSlice(supportedTests), ", ")))
-			}
-
-			platform, params, err := parseOptions(request.StringParam("options", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-
-			params["test"] = test
-			if strings.Contains(params["test"], "-upgrade") {
-				response.Reply("Upgrade type tests require the 'test upgrade' command")
-				return
-			}
-
-			msg, err := manager.LaunchJobForUser(&JobRequest{
-				OriginalMessage: request.Event().Text,
-				User:            user,
-				Inputs:          [][]string{from},
-				Type:            JobTypeTest,
-				Channel:         channel,
-				Platform:        platform,
-				JobParams:       params,
-			})
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			response.Reply(msg)
-		},
-	})
-
-	slack.Command("build <from>", &slacker.CommandDefinition{
-		Description: "Create a new release image from one or more pull requests. The successful build location will be sent to you when it completes and then preserved for 12 hours.",
-		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
-			user := request.Event().User
-			channel := request.Event().Channel
-			if !isDirectMessage(channel) {
-				response.Reply("this command is only accepted via direct message")
-				return
-			}
-
-			from, err := parseImageInput(request.StringParam("from", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			if len(from) == 0 {
-				response.Reply("you must specify at least one pull request to build a release image")
-				return
-			}
-
-			platform, params, err := parseOptions(request.StringParam("options", ""))
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-
-			msg, err := manager.LaunchJobForUser(&JobRequest{
-				OriginalMessage: stripLinks(request.Event().Text),
-				User:            user,
-				Inputs:          [][]string{from},
-				Type:            JobTypeBuild,
-				Channel:         channel,
-				Platform:        platform,
-				JobParams:       params,
-			})
-			if err != nil {
-				response.Reply(err.Error())
-				return
-			}
-			response.Reply(msg)
+			b.notifyCluster(slacker.NewResponse(request.Event(), slack.Client(), slack.RTM()), job)
 		},
 	})
 
 	slack.Command("version", &slacker.CommandDefinition{
 		Description: "Report the version of the bot",
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
-			response.Reply(fmt.Sprintf("Running `%s` from https://github.com/openshift/ci-chat-bot", version.Get().String()))
+			response.Reply(fmt.Sprintf("Running `%s` from https://github.com/bbrowning/crc-cluster-bot", version.Get().String()))
 		},
 	})
 
-	klog.Infof("ci-chat-bot up and listening to slack")
+	klog.Infof("crc-cluster-bot up and listening to slack")
 	return slack.Listen(context.Background())
 }
 
@@ -340,85 +161,29 @@ func (b *Bot) jobResponder(s *slacker.Slacker) func(Job) {
 			klog.Infof("job %q has no requested channel or user, can't notify", job.Name)
 			return
 		}
-		switch job.Mode {
-		case "launch":
-			if len(job.Credentials) == 0 && len(job.Failure) == 0 {
-				klog.Infof("no credentials or failure, still pending")
-				return
-			}
-		default:
-			if len(job.URL) == 0 && len(job.Failure) == 0 {
-				klog.Infof("no URL or failure, still pending")
-				return
-			}
+		if len(job.Credentials) == 0 && len(job.Failure) == 0 {
+			klog.Infof("no credentials or failure, still pending")
+			return
 		}
-		b.notifyJob(slacker.NewResponse(&slack.MessageEvent{Msg: slack.Msg{Channel: job.RequestedChannel}}, s.Client(), s.RTM()), &job)
+		b.notifyCluster(slacker.NewResponse(&slack.MessageEvent{Msg: slack.Msg{Channel: job.RequestedChannel}}, s.Client(), s.RTM()), &job)
 	}
 }
 
-func (b *Bot) notifyJob(response slacker.ResponseWriter, job *Job) {
-	switch job.Mode {
-	case "launch":
-		switch {
-		case len(job.Failure) > 0 && len(job.URL) > 0:
-			response.Reply(fmt.Sprintf("your cluster failed to launch: %s (<%s|logs>)", job.Failure, job.URL))
-		case len(job.Failure) > 0:
-			response.Reply(fmt.Sprintf("your cluster failed to launch: %s", job.Failure))
-		case len(job.Credentials) == 0 && len(job.URL) > 0:
-			response.Reply(fmt.Sprintf("cluster is still starting (launched %d minutes ago, <%s|logs>)", time.Now().Sub(job.RequestedAt)/time.Minute, job.URL))
-		case len(job.Credentials) == 0:
-			response.Reply(fmt.Sprintf("cluster is still starting (launched %d minutes ago)", time.Now().Sub(job.RequestedAt)/time.Minute))
-		default:
-			comment := fmt.Sprintf(
-				"Your cluster is ready, it will be shut down automatically in ~%d minutes.",
-				job.ExpiresAt.Sub(time.Now())/time.Minute,
-			)
-			if len(job.PasswordSnippet) > 0 {
-				comment += "\n" + job.PasswordSnippet
-			}
-			b.sendKubeconfig(response, job.RequestedChannel, job.Credentials, comment, job.RequestedAt.Format("2006-01-02-150405"))
-		}
-		return
-	}
-
-	if len(job.URL) > 0 {
-		switch job.State {
-		case prowapiv1.FailureState, prowapiv1.AbortedState, prowapiv1.ErrorState:
-			response.Reply(fmt.Sprintf("job <%s|%s> failed", job.URL, job.OriginalMessage))
-			return
-		case prowapiv1.SuccessState:
-			response.Reply(fmt.Sprintf("job <%s|%s> succeeded", job.URL, job.OriginalMessage))
-			return
-		}
-	} else {
-		switch job.State {
-		case prowapiv1.FailureState, prowapiv1.AbortedState, prowapiv1.ErrorState:
-			response.Reply(fmt.Sprintf("job %s failed, but no details could be retrieved", job.OriginalMessage))
-			return
-		case prowapiv1.SuccessState:
-			response.Reply(fmt.Sprintf("job %s succeded, but no details could be retrieved", job.OriginalMessage))
-			return
-		}
-	}
-
+func (b *Bot) notifyCluster(response slacker.ResponseWriter, cluster *Job) {
 	switch {
-	case len(job.Credentials) == 0 && len(job.URL) > 0:
-		if len(job.OriginalMessage) > 0 {
-			response.Reply(fmt.Sprintf("job <%s|%s> is running", job.URL, job.OriginalMessage))
-		} else {
-			response.Reply(fmt.Sprintf("job is running, see %s for details", job.URL))
-		}
-	case len(job.Credentials) == 0:
-		response.Reply(fmt.Sprintf("job is running (launched %d minutes ago)", time.Now().Sub(job.RequestedAt)/time.Minute))
+	case len(cluster.Failure) > 0:
+		response.Reply(fmt.Sprintf("your cluster failed to launch: %s", cluster.Failure))
+	case len(cluster.Credentials) == 0:
+		response.Reply(fmt.Sprintf("cluster is still starting (launched %d minutes ago)", time.Now().Sub(cluster.RequestedAt)/time.Minute))
 	default:
-		comment := fmt.Sprintf("Your job has started a cluster, it will be shut down when the test ends.")
-		if len(job.URL) > 0 {
-			comment += fmt.Sprintf(" See %s for details.", job.URL)
+		comment := fmt.Sprintf(
+			"Your cluster is ready, it will be shut down automatically in ~%d minutes.",
+			cluster.ExpiresAt.Sub(time.Now())/time.Minute,
+		)
+		if len(cluster.PasswordSnippet) > 0 {
+			comment += "\n" + cluster.PasswordSnippet
 		}
-		if len(job.PasswordSnippet) > 0 {
-			comment += "\n" + job.PasswordSnippet
-		}
-		b.sendKubeconfig(response, job.RequestedChannel, job.Credentials, comment, job.RequestedAt.Format("2006-01-02-150405"))
+		b.sendKubeconfig(response, cluster.RequestedChannel, cluster.Credentials, comment, cluster.RequestedAt.Format("2006-01-02-150405"))
 	}
 }
 
@@ -470,19 +235,13 @@ func codeSlice(items []string) []string {
 	return code
 }
 
-func parseImageInput(input string) ([]string, error) {
+func parseBundleName(input string) (string, error) {
 	input = strings.TrimSpace(input)
 	if len(input) == 0 {
-		return nil, nil
+		return "", nil
 	}
 	input = stripLinks(input)
-	parts := strings.Split(input, ",")
-	for _, part := range parts {
-		if len(part) == 0 {
-			return nil, fmt.Errorf("image inputs must not contain empty items")
-		}
-	}
-	return parts, nil
+	return input, nil
 }
 
 func stripLinks(input string) string {
@@ -510,32 +269,4 @@ func stripLinks(input string) string {
 		input = input[open+close+1:]
 	}
 	return b.String()
-}
-
-func parseOptions(options string) (string, map[string]string, error) {
-	params, err := paramsFromAnnotation(options)
-	if err != nil {
-		return "", nil, fmt.Errorf("options could not be parsed: %v", err)
-	}
-	var platform string
-	for opt := range params {
-		switch {
-		case contains(supportedPlatforms, opt):
-			if len(platform) > 0 {
-				return "", nil, fmt.Errorf("you may only specify one platform in options")
-			}
-			platform = opt
-			delete(params, opt)
-		case opt == "":
-			delete(params, opt)
-		case contains(supportedParameters, opt):
-			// do nothing
-		default:
-			return "", nil, fmt.Errorf("unrecognized option: %s", opt)
-		}
-	}
-	if len(platform) == 0 {
-		platform = "aws"
-	}
-	return platform, params, nil
 }

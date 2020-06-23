@@ -1,5 +1,5 @@
 build:
-	go build -ldflags "-X k8s.io/client-go/pkg/version.gitVersion=$$(git describe --abbrev=8 --dirty --always)" -mod vendor -o ci-chat-bot .
+	go build -ldflags "-X k8s.io/client-go/pkg/version.gitVersion=$$(git describe --abbrev=8 --dirty --always)" -mod vendor -o crc-cluster-bot .
 .PHONY: build
 
 update-deps:
