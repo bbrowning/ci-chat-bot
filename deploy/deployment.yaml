@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crc-cluster-bot
+  namespace: crc-cluster-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: crc-cluster-bot
+  template:
+    metadata:
+      labels:
+        name: crc-cluster-bot
+    spec:
+      serviceAccountName: crc-cluster-bot
+      containers:
+        - name: crc-cluster-bot
+          image: REPLACE_IMAGE
+          imagePullPolicy: Always
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: crc-cluster-bot
+                  key: botToken
+            - name: OPENSHIFT_PULL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: crc-cluster-bot
+                  key: openshiftPullSecret

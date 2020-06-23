@@ -1,0 +1,35 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  creationTimestamp: null
+  name: crc-cluster-bot
+  namespace: crc-clusters
+rules:
+- apiGroups:
+  - crc.developer.openshift.io
+  resources:
+  - "*"
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  creationTimestamp: null
+  name: crc-cluster-bot
+  namespace: crc-operator
+rules:
+- apiGroups:
+  - crc.developer.openshift.io
+  resources:
+  - "*"
+  verbs:
+  - get
+  - list
+  - watch

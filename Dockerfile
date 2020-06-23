@@ -1,8 +1,3 @@
-FROM registry.svc.ci.openshift.org/openshift/release:golang-1.13 AS builder
-WORKDIR /go/src/github.com/openshift/ci-chat-bot
-COPY . .
-RUN make
-
-FROM registry.svc.ci.openshift.org/openshift/origin-v4.0:base
-COPY --from=builder /go/src/github.com/openshift/ci-chat-bot/ci-chat-bot /usr/bin/
-ENTRYPOINT ["/usr/bin/ci-chat-bot"]
+FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
+COPY crc-cluster-bot /usr/bin/
+ENTRYPOINT ["/usr/bin/crc-cluster-bot"]
