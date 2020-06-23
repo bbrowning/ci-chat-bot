@@ -39,7 +39,7 @@ func (b *Bot) Start(manager JobManager) error {
 	slack.Command("launch <bundle> <options>", &slacker.CommandDefinition{
 		Description: fmt.Sprintf(
 			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations limited to 'persistent' today that will enable persistence for your cluster, allowing it to survive stops and starts.", strings.Join(validBundles, ", ")),
-		Example: fmt.Sprintf("launch %s persistent", validBundles[0]),
+		Example: fmt.Sprintf("launch %s persistent", validBundles[len(validBundles)-1]),
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User
 			channel := request.Event().Channel
@@ -52,6 +52,10 @@ func (b *Bot) Start(manager JobManager) error {
 			if err != nil {
 				response.Reply(err.Error())
 				return
+			}
+			// Default to the most recent available bundle
+			if bundle == "" {
+				bundle = validBundles[len(validBundles)-1]
 			}
 
 			params, err := parseOptions(request.StringParam("options", ""))
