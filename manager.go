@@ -39,38 +39,40 @@ type ClusterRequest struct {
 	RequestedAt time.Time
 	Name        string
 
-	JobName string
-	Params  map[string]string
+	Params map[string]string
 }
 
-// JobManager responds to user actions and tracks the state of the launched
+// ClusterManager responds to user actions and tracks the state of the launched
 // clusters.
-type JobManager interface {
-	SetNotifier(JobCallbackFunc)
+type ClusterManager interface {
+	SetNotifier(ClusterCallbackFunc)
 
 	LaunchClusterForUser(req *ClusterRequest) (string, error)
 	SyncClusterForUser(user string) (string, error)
-	TerminateClusterForUser(user string) (string, error)
-	GetLaunchCluster(user string) (*Job, error)
+	DeleteClusterForUser(user string) (string, error)
+	StopClusterForUser(user string) (string, error)
+	ResumeClusterForUser(user string, channel string) (string, error)
+	GetLaunchCluster(user string) (*Cluster, error)
 	LookupBundle(bundle string) (string, error)
 	ListBundles() ([]string, error)
 	ListClusters(users ...string) string
 }
 
-// JobCallbackFunc is invoked when the job changes state in a significant
+// ClusterCallbackFunc is invoked when the cluster changes state in a significant
 // way.
-type JobCallbackFunc func(Job)
+type ClusterCallbackFunc func(Cluster)
 
-// Job responds to user requests and tracks the state of the launched
-// jobs. This object must be recreatable from a ProwJob, but the RequestedChannel
-// field may be empty to indicate the user has already been notified.
-type Job struct {
+// Cluster responds to user requests and tracks the state of the
+// launched clusters. This object must be recreatable from a CrcCluster,
+// but the RequestedChannel field may be empty to indicate the user
+// has already been notified.
+type Cluster struct {
 	Name string
 
 	OriginalMessage string
 
 	Ready   bool
-	JobName string
+	Stopped bool
 
 	Params map[string]string
 
@@ -91,14 +93,15 @@ type Job struct {
 	Complete      bool
 }
 
-func (j Job) IsComplete() bool {
+func (j Cluster) IsComplete() bool {
 	return j.Complete || len(j.Credentials) > 0 || j.Ready
 }
 
-type jobManager struct {
+type clusterManager struct {
 	lock                 sync.Mutex
 	requests             map[string]*ClusterRequest
-	jobs                 map[string]*Job
+	clusters             map[string]*Cluster
+	stopped              map[string]*Cluster
 	started              time.Time
 	recentStartEstimates []time.Duration
 
@@ -112,22 +115,23 @@ type jobManager struct {
 	crcBundleNamespace  string
 	crcClusterNamespace string
 
-	muJob struct {
+	muCluster struct {
 		lock    sync.Mutex
 		running map[string]struct{}
 	}
 
-	notifierFn JobCallbackFunc
+	notifierFn ClusterCallbackFunc
 }
 
-// NewJobManager creates a manager that will track the requests made by a user to create clusters
-// and reflect that state into ProwJobs that launch clusters. It attempts to recreate state on startup
-// by querying prow, but does not guarantee that some notifications to users may not be sent or may be
-// sent twice.
-func NewJobManager(pullSecret string, crcBundleClient dynamic.NamespaceableResourceInterface, crcClusterClient dynamic.NamespaceableResourceInterface) *jobManager {
-	m := &jobManager{
+// NewClusterManager creates a manager that will track the requests
+// made by a user to create clusters and reflect that state into
+// CrcClusters. It attempts to recreate state on startup by querying
+// the cluster, but does not guarantee that some notifications to
+// users may not be sent or may be sent twice.
+func NewClusterManager(pullSecret string, crcBundleClient dynamic.NamespaceableResourceInterface, crcClusterClient dynamic.NamespaceableResourceInterface) *clusterManager {
+	m := &clusterManager{
 		requests:      make(map[string]*ClusterRequest),
-		jobs:          make(map[string]*Job),
+		clusters:      make(map[string]*Cluster),
 		clusterPrefix: "bot-",
 		maxClusters:   maxTotalClusters,
 		maxAge:        5 * time.Hour,
@@ -138,11 +142,11 @@ func NewJobManager(pullSecret string, crcBundleClient dynamic.NamespaceableResou
 		crcBundleNamespace:  "crc-operator",
 		crcClusterNamespace: "crc-clusters",
 	}
-	m.muJob.running = make(map[string]struct{})
+	m.muCluster.running = make(map[string]struct{})
 	return m
 }
 
-func (m *jobManager) Start() error {
+func (m *clusterManager) Start() error {
 	go wait.Forever(func() {
 		if err := m.sync(); err != nil {
 			klog.Infof("error during sync: %v", err)
@@ -192,7 +196,18 @@ func paramsToString(params map[string]string) string {
 	return strings.Join(pairs, ",")
 }
 
-func (m *jobManager) sync() error {
+func requestFromCluster(cluster *Cluster) *ClusterRequest {
+	return &ClusterRequest{
+		OriginalMessage: cluster.OriginalMessage,
+		User:            cluster.RequestedBy,
+		Name:            cluster.Name,
+		Params:          cluster.Params,
+		RequestedAt:     cluster.RequestedAt,
+		Channel:         cluster.RequestedChannel,
+	}
+}
+
+func (m *clusterManager) sync() error {
 	u, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).List(metav1.ListOptions{
 		LabelSelector: labels.SelectorFromSet(labels.Set{
 			"crc-cluster-bot.openshift.io/launch": "true",
@@ -214,19 +229,20 @@ func (m *jobManager) sync() error {
 		m.started = now
 	}
 
-	var clusterNamesToStop []string
+	var clustersToStop []*Cluster
 	for _, cluster := range list.Items {
 		klog.Infof("Found cluster: %s", cluster.Name)
-		previous := m.jobs[cluster.Name]
 
-		j := &Job{
+		previous := m.clusters[cluster.Name]
+
+		j := &Cluster{
 			Name:             cluster.Name,
 			Ready:            cluster.Status.Conditions.IsTrueFor("Ready"),
+			Stopped:          cluster.Status.Stopped,
 			Bundle:           cluster.Spec.BundleName,
 			OriginalMessage:  cluster.Annotations["crc-cluster-bot.openshift.io/originalMessage"],
 			RequestedBy:      cluster.Annotations["crc-cluster-bot.openshift.io/user"],
 			RequestedChannel: cluster.Annotations["crc-cluster-bot.openshift.io/channel"],
-			RequestedAt:      cluster.CreationTimestamp.Time,
 		}
 
 		var err error
@@ -236,17 +252,28 @@ func (m *jobManager) sync() error {
 			continue
 		}
 
+		if startedAtString := cluster.Annotations["crc-cluster-bot.openshift.io/startedAt"]; len(startedAtString) > 0 {
+			startedAt, err := time.Parse(time.RFC3339, startedAtString)
+			if err != nil {
+				klog.Infof("Unable to parse time from %s: %v", cluster.Name, err)
+				continue
+			}
+			j.RequestedAt = startedAt
+		} else {
+			j.RequestedAt = cluster.CreationTimestamp.Time
+		}
+
 		if expirationString := cluster.Annotations["crc-cluster-bot.openshift.io/expires"]; len(expirationString) > 0 {
 			if maxSeconds, err := strconv.Atoi(expirationString); err == nil && maxSeconds > 0 {
-				j.ExpiresAt = cluster.CreationTimestamp.Add(time.Duration(maxSeconds) * time.Second)
+				j.ExpiresAt = j.RequestedAt.Add(time.Duration(maxSeconds) * time.Second)
 			}
 		}
 		if j.ExpiresAt.IsZero() {
-			j.ExpiresAt = cluster.CreationTimestamp.Time.Add(m.maxAge)
+			j.ExpiresAt = j.RequestedAt.Add(m.maxAge)
 		}
 
 		if j.ExpiresAt.Before(now) {
-			clusterNamesToStop = append(clusterNamesToStop, j.Name)
+			clustersToStop = append(clustersToStop, j)
 		}
 
 		if j.Ready {
@@ -256,44 +283,31 @@ func (m *jobManager) sync() error {
 			}
 		}
 
-		if user := j.RequestedBy; len(user) > 0 {
+		if user := j.RequestedBy; len(user) > 0 && !j.Stopped {
 			if _, ok := m.requests[user]; !ok {
-				params, err := paramsFromAnnotation(cluster.Annotations["crc-cluster-bot.openshift.io/params"])
-				if err != nil {
-					klog.Infof("Unable to unmarshal parameters from %s: %v", cluster.Name, err)
-					continue
-				}
-				m.requests[user] = &ClusterRequest{
-					OriginalMessage: cluster.Annotations["crc-cluster-bot.openshift.io/originalMessage"],
-
-					User:        user,
-					Name:        cluster.Name,
-					Params:      params,
-					RequestedAt: cluster.CreationTimestamp.Time,
-					Channel:     cluster.Annotations["crc-cluster-bot.openshift.io/channel"],
-				}
+				m.requests[user] = requestFromCluster(j)
 			}
 		}
 
-		m.jobs[cluster.Name] = j
+		m.clusters[cluster.Name] = j
 		if previous == nil || previous.Ready != j.Ready || !previous.IsComplete() {
 			go m.handleClusterStartup(*j, "sync")
 		}
 	}
 
-	// actually terminate too old clusters
-	for _, clusterName := range clusterNamesToStop {
-		if err := m.stopCluster(clusterName); err != nil {
-			klog.Errorf("unable to terminate running cluster %s: %v", clusterName, err)
+	// actually stop too old clusters
+	for _, cluster := range clustersToStop {
+		if err := m.stopClusterAndReleaseRequest(cluster.Name, cluster.RequestedBy, false); err != nil {
+			klog.Errorf("unable to stop running cluster %s: %v", cluster.Name, err)
 			return err
 		}
 	}
 
 	// forget everything that is too old
-	for _, cluster := range m.jobs {
+	for _, cluster := range m.clusters {
 		if cluster.ExpiresAt.Before(now) {
 			klog.Infof("cluster %q is expired", cluster.Name)
-			delete(m.jobs, cluster.Name)
+			delete(m.clusters, cluster.Name)
 		}
 	}
 	for _, req := range m.requests {
@@ -303,17 +317,17 @@ func (m *jobManager) sync() error {
 		}
 	}
 
-	klog.Infof("Cluster sync complete, %d clusters and %d requests", len(m.jobs), len(m.requests))
+	klog.Infof("Cluster sync complete, %d clusters and %d requests", len(m.clusters), len(m.requests))
 	return nil
 }
 
-func (m *jobManager) SetNotifier(fn JobCallbackFunc) {
+func (m *clusterManager) SetNotifier(fn ClusterCallbackFunc) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	m.notifierFn = fn
 }
 
-func (m *jobManager) estimateCompletion(requestedAt time.Time) time.Duration {
+func (m *clusterManager) estimateCompletion(requestedAt time.Time) time.Duration {
 	// find the median, or default to 15m
 	var median time.Duration
 	if l := len(m.recentStartEstimates); l > 0 {
@@ -343,15 +357,20 @@ func contains(arr []string, s string) bool {
 	return false
 }
 
-func (m *jobManager) ListClusters(users ...string) string {
+func (m *clusterManager) ListClusters(users ...string) string {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	var clusters []*Job
+	var clusters []*Cluster
+	var stoppedClusters []*Cluster
 	var runningClusters int
-	for _, cluster := range m.jobs {
-		clusters = append(clusters, cluster)
-		runningClusters++
+	for _, cluster := range m.clusters {
+		if cluster.Stopped {
+			stoppedClusters = append(stoppedClusters, cluster)
+		} else {
+			clusters = append(clusters, cluster)
+			runningClusters++
+		}
 	}
 	sort.Slice(clusters, func(i, j int) bool {
 		if clusters[i].RequestedAt.Before(clusters[j].RequestedAt) {
@@ -372,7 +391,7 @@ func (m *jobManager) ListClusters(users ...string) string {
 		for _, cluster := range clusters {
 			var details string
 
-			// summarize the job parameters
+			// summarize the cluster parameters
 			var options string
 			params := make(map[string]string)
 			for k, v := range cluster.Params {
@@ -397,13 +416,31 @@ func (m *jobManager) ListClusters(users ...string) string {
 		fmt.Fprintf(buf, "\n")
 	}
 
+	if len(stoppedClusters) > 0 {
+		fmt.Fprintf(buf, "Stopped clusters:\n\n")
+		for _, cluster := range stoppedClusters {
+			var details string
+			// summarize the cluster parameters
+			var options string
+			params := make(map[string]string)
+			for k, v := range cluster.Params {
+				params[k] = v
+			}
+			if s := paramsToString(params); len(s) > 0 {
+				options = fmt.Sprintf(" (%s)", s)
+			}
+
+			fmt.Fprintf(buf, "• <@%s>%s%s - cluster is stopped%s\n", cluster.RequestedBy, cluster.Bundle, options, details)
+		}
+	}
+
 	fmt.Fprintf(buf, "\nbot uptime is %.1f minutes", now.Sub(m.started).Seconds()/60)
 	return buf.String()
 }
 
-type callbackFunc func(job Job)
+type callbackFunc func(cluster Cluster)
 
-func (m *jobManager) GetLaunchCluster(user string) (*Job, error) {
+func (m *clusterManager) GetLaunchCluster(user string) (*Cluster, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -414,7 +451,7 @@ func (m *jobManager) GetLaunchCluster(user string) (*Job, error) {
 	if len(existing.Name) == 0 {
 		return nil, fmt.Errorf("you are still on the waitlist")
 	}
-	cluster, ok := m.jobs[existing.Name]
+	cluster, ok := m.clusters[existing.Name]
 	if !ok {
 		return nil, fmt.Errorf("your cluster has expired and credentials are no longer available")
 	}
@@ -422,7 +459,7 @@ func (m *jobManager) GetLaunchCluster(user string) (*Job, error) {
 	return &copied, nil
 }
 
-func (m *jobManager) LookupBundle(name string) (string, error) {
+func (m *clusterManager) LookupBundle(name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("you must specify a bundle to lookup")
 	}
@@ -442,7 +479,7 @@ Bundle %s:
 	return out, nil
 }
 
-func (m *jobManager) ListBundles() ([]string, error) {
+func (m *clusterManager) ListBundles() ([]string, error) {
 	var bundles []string
 	u, err := m.crcBundleClient.Namespace(m.crcBundleNamespace).List(metav1.ListOptions{})
 	if err != nil {
@@ -458,7 +495,7 @@ func (m *jobManager) ListBundles() ([]string, error) {
 	return bundles, nil
 }
 
-func (m *jobManager) resolveToCluster(req *ClusterRequest) (*Job, error) {
+func (m *clusterManager) resolveToCluster(req *ClusterRequest) (*Cluster, error) {
 	user := req.User
 	if len(user) == 0 {
 		return nil, fmt.Errorf("must specify the name of the user who requested this cluster")
@@ -468,7 +505,7 @@ func (m *jobManager) resolveToCluster(req *ClusterRequest) (*Job, error) {
 	name := fmt.Sprintf("%s%s", m.clusterPrefix, namespaceSafeHash(req.RequestedAt.UTC().Format("2006-01-02-150405.9999")))
 	req.Name = name
 
-	cluster := &Job{
+	cluster := &Cluster{
 		OriginalMessage: req.OriginalMessage,
 		Name:            name,
 
@@ -485,14 +522,7 @@ func (m *jobManager) resolveToCluster(req *ClusterRequest) (*Job, error) {
 	return cluster, nil
 }
 
-func (m *jobManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
-	cluster, err := m.resolveToCluster(req)
-	if err != nil {
-		return "", err
-	}
-
-	klog.Infof("Cluster %q requested by user %q - params=%s", cluster.Name, req.User, paramsToString(cluster.Params))
-
+func (m *clusterManager) startCluster(cluster *Cluster, req *ClusterRequest) (string, error) {
 	msg, err := func() (string, error) {
 		m.lock.Lock()
 		defer m.lock.Unlock()
@@ -504,7 +534,7 @@ func (m *jobManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
 				klog.Infof("user %q already requested cluster", user)
 				return "", fmt.Errorf("you have already requested a cluster and it should be ready in ~ %d minutes", m.estimateCompletion(existing.RequestedAt)/time.Minute)
 			}
-			if cluster, ok := m.jobs[existing.Name]; ok {
+			if cluster, ok := m.clusters[existing.Name]; ok {
 				if len(cluster.Credentials) > 0 {
 					klog.Infof("user %q cluster is already up", user)
 					return "your cluster is already running, see your credentials again with the 'auth' command", nil
@@ -515,22 +545,23 @@ func (m *jobManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
 				}
 
 				klog.Infof("user %q cluster failed, allowing them to request another", user)
-				delete(m.jobs, existing.Name)
+				delete(m.clusters, existing.Name)
 				delete(m.requests, user)
 			}
 		}
+
 		m.requests[user] = req
 
 		launchedClusters := 0
-		for _, cluster := range m.jobs {
-			if cluster != nil && !cluster.Complete && len(cluster.Failure) == 0 {
+		for _, cluster := range m.clusters {
+			if cluster != nil && !cluster.Complete && !cluster.Stopped && len(cluster.Failure) == 0 {
 				launchedClusters++
 			}
 		}
 		if launchedClusters >= m.maxClusters {
 			klog.Infof("user %q is will have to wait", user)
 			var waitUntil time.Time
-			for _, c := range m.jobs {
+			for _, c := range m.clusters {
 				if c == nil {
 					continue
 				}
@@ -544,7 +575,7 @@ func (m *jobManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
 			}
 			return "", fmt.Errorf("no clusters are currently available, next slot available in %d minutes", int(math.Ceil(minutes)))
 		}
-		m.jobs[cluster.Name] = cluster
+		m.clusters[cluster.Name] = cluster
 		klog.Infof("Cluster %q starting for %q", cluster.Name, user)
 		return "", nil
 	}()
@@ -552,16 +583,59 @@ func (m *jobManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
 		return msg, err
 	}
 
-	if err := m.newCluster(cluster); err != nil {
+	if err := m.createOrUpdateCrcCluster(cluster); err != nil {
 		return "", fmt.Errorf("the requested cluster cannot be started: %v", err)
 	}
 
 	go m.handleClusterStartup(*cluster, "start")
+	return "", nil
+}
+
+func (m *clusterManager) LaunchClusterForUser(req *ClusterRequest) (string, error) {
+	cluster, err := m.resolveToCluster(req)
+	if err != nil {
+		return "", err
+	}
+
+	klog.Infof("Cluster %q requested by user %q - params=%s", cluster.Name, req.User, paramsToString(cluster.Params))
+
+	for _, stoppedCluster := range m.clusters {
+		if stoppedCluster.Stopped && stoppedCluster.RequestedBy == req.User {
+			klog.Infof("user %q has a stopped cluster and may not launch another", req.User)
+			return "", fmt.Errorf("you have a stopped cluster and must resume or delete that cluster before launching another")
+		}
+	}
+
+	msg, err := m.startCluster(cluster, req)
+	if err != nil || len(msg) > 0 {
+		return msg, err
+	}
 
 	return "", fmt.Errorf("a cluster is being created - I'll send you the credentials in about %d minutes", m.estimateCompletion(req.RequestedAt)/time.Minute)
 }
 
-func (m *jobManager) clusterNameForUser(user string) (string, error) {
+func (m *clusterManager) stoppedClusterNameForUser(user string) (string, error) {
+	if len(user) == 0 {
+		return "", fmt.Errorf("must specify the name of the user who requested this cluster")
+	}
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	var existing *Cluster
+	for _, cluster := range m.clusters {
+		if cluster.RequestedBy == user {
+			existing = cluster
+			break
+		}
+	}
+	if existing == nil || len(existing.Name) == 0 || !existing.Stopped {
+		return "", fmt.Errorf("no cluster has been requested by you")
+	}
+	return existing.Name, nil
+}
+
+func (m *clusterManager) clusterNameForUser(user string) (string, error) {
 	if len(user) == 0 {
 		return "", fmt.Errorf("must specify the name of the user who requested this cluster")
 	}
@@ -576,34 +650,87 @@ func (m *jobManager) clusterNameForUser(user string) (string, error) {
 	return existing.Name, nil
 }
 
-func (m *jobManager) TerminateClusterForUser(user string) (string, error) {
+func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user string, shouldDelete bool) error {
+	action := "stop"
+	if shouldDelete {
+		action = "delete"
+	}
+	if err := m.stopCluster(cluster, shouldDelete); err != nil {
+		klog.Errorf("unable to %s running cluster %s: %v", action, cluster, err)
+		return fmt.Errorf("unable to %s cluster", action)
+	}
+
+	if len(user) > 0 {
+		// mark the cluster as failed, clear the request, and allow the user to launch again
+		m.lock.Lock()
+		defer m.lock.Unlock()
+		existing, ok := m.requests[user]
+		if ok && existing.Name != cluster {
+			return fmt.Errorf("another cluster was launched while trying to %s this cluster", action)
+		}
+		delete(m.requests, user)
+		if cluster, ok := m.clusters[cluster]; ok {
+			cluster.Failure = fmt.Sprintf("%s requested", action)
+			cluster.ExpiresAt = time.Now().Add(5 * time.Minute)
+			cluster.Complete = true
+			cluster.Stopped = true
+		}
+	}
+	return nil
+}
+
+func (m *clusterManager) DeleteClusterForUser(user string) (string, error) {
+	name, err := m.clusterNameForUser(user)
+	if err != nil {
+		name, err = m.stoppedClusterNameForUser(user)
+		if err != nil {
+			return "", err
+		}
+	}
+	klog.Infof("user %q requests cluster %q to be deleted", user, name)
+	if err := m.stopClusterAndReleaseRequest(name, user, true); err != nil {
+		return "", err
+	}
+	return "the cluster was flagged for deletion, you may now launch another", nil
+}
+
+func (m *clusterManager) StopClusterForUser(user string) (string, error) {
 	name, err := m.clusterNameForUser(user)
 	if err != nil {
 		return "", err
 	}
-	klog.Infof("user %q requests cluster %q to be terminated", user, name)
-	if err := m.stopCluster(name); err != nil {
-		klog.Errorf("unable to terminate running cluster %s: %v", name, err)
-		return "", fmt.Errorf("unable to terminate your cluster")
-	}
-
-	// mark the cluster as failed, clear the request, and allow the user to launch again
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	existing, ok := m.requests[user]
-	if !ok || existing.Name != name {
-		return "", fmt.Errorf("another cluster was launched while trying to stop this cluster")
-	}
-	delete(m.requests, user)
-	if job, ok := m.jobs[name]; ok {
-		job.Failure = "deletion requested"
-		job.ExpiresAt = time.Now().Add(5 * time.Minute)
-		job.Complete = true
+	klog.Infof("user %q requests cluster %q to be stopped", user, name)
+	if err := m.stopClusterAndReleaseRequest(name, user, false); err != nil {
+		return "", err
 	}
 	return "the cluster was flagged for shutdown, you may now launch another", nil
 }
 
-func (m *jobManager) SyncClusterForUser(user string) (string, error) {
+func (m *clusterManager) ResumeClusterForUser(user string, channel string) (string, error) {
+	var cluster *Cluster
+	for _, stoppedCluster := range m.clusters {
+		if stoppedCluster.Stopped && stoppedCluster.RequestedBy == user {
+			cluster = stoppedCluster
+			break
+		}
+	}
+	req := requestFromCluster(cluster)
+	req.Channel = channel
+	req.RequestedAt = time.Now()
+	cluster.RequestedChannel = channel
+	cluster.RequestedAt = req.RequestedAt
+	cluster.ExpiresAt = req.RequestedAt.Add(m.maxAge)
+	klog.Infof("Cluster %q requested resume by user %q", cluster.Name, req.User)
+
+	msg, err := m.startCluster(cluster, req)
+	if err != nil || len(msg) > 0 {
+		return msg, err
+	}
+
+	return "", fmt.Errorf("your cluster is being resumed - I'll send you the credentials in about %d minutes", m.estimateCompletion(req.RequestedAt)/time.Minute)
+}
+
+func (m *clusterManager) SyncClusterForUser(user string) (string, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -615,7 +742,7 @@ func (m *jobManager) SyncClusterForUser(user string) (string, error) {
 	if !ok || len(existing.Name) == 0 {
 		return "", fmt.Errorf("no cluster has been requested by you")
 	}
-	cluster, ok := m.jobs[existing.Name]
+	cluster, ok := m.clusters[existing.Name]
 	if !ok {
 		return "", fmt.Errorf("cluster hasn't been initialized yet, cannot refresh")
 	}
@@ -638,10 +765,10 @@ func (m *jobManager) SyncClusterForUser(user string) (string, error) {
 	return msg, nil
 }
 
-func (m *jobManager) clusterStartupIsComplete(cluster *Job) bool {
+func (m *clusterManager) clusterStartupIsComplete(cluster *Cluster) bool {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	current, ok := m.jobs[cluster.Name]
+	current, ok := m.clusters[cluster.Name]
 	if !ok {
 		return false
 	}
@@ -653,7 +780,10 @@ func (m *jobManager) clusterStartupIsComplete(cluster *Job) bool {
 	return false
 }
 
-func (m *jobManager) handleClusterStartup(cluster Job, source string) {
+func (m *clusterManager) handleClusterStartup(cluster Cluster, source string) {
+	if cluster.Stopped {
+		return
+	}
 	if !m.tryClusterLaunch(cluster.Name) {
 		klog.Infof("Cluster %q already starting (%s)", cluster.Name, source)
 		return
@@ -667,7 +797,7 @@ func (m *jobManager) handleClusterStartup(cluster Job, source string) {
 	m.finishedClusterLaunch(cluster)
 }
 
-func (m *jobManager) finishedClusterLaunch(cluster Job) {
+func (m *clusterManager) finishedClusterLaunch(cluster Cluster) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -691,24 +821,24 @@ func (m *jobManager) finishedClusterLaunch(cluster Job) {
 
 	// ensure we send no further notifications
 	cluster.RequestedChannel = ""
-	m.jobs[cluster.Name] = &cluster
+	m.clusters[cluster.Name] = &cluster
 }
 
-func (m *jobManager) tryClusterLaunch(name string) bool {
-	m.muJob.lock.Lock()
-	defer m.muJob.lock.Unlock()
+func (m *clusterManager) tryClusterLaunch(name string) bool {
+	m.muCluster.lock.Lock()
+	defer m.muCluster.lock.Unlock()
 
-	_, ok := m.muJob.running[name]
+	_, ok := m.muCluster.running[name]
 	if ok {
 		return false
 	}
-	m.muJob.running[name] = struct{}{}
+	m.muCluster.running[name] = struct{}{}
 	return true
 }
 
-func (m *jobManager) finishClusterLaunch(name string) {
-	m.muJob.lock.Lock()
-	defer m.muJob.lock.Unlock()
+func (m *clusterManager) finishClusterLaunch(name string) {
+	m.muCluster.lock.Lock()
+	defer m.muCluster.lock.Unlock()
 
-	delete(m.muJob.running, name)
+	delete(m.muCluster.running, name)
 }

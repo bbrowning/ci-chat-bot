@@ -51,7 +51,7 @@ func run() error {
 	crcBundleClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "crc.developer.openshift.io", Version: "v1alpha1", Resource: "crcbundles"})
 	crcClusterClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "crc.developer.openshift.io", Version: "v1alpha1", Resource: "crcclusters"})
 
-	manager := NewJobManager(pullSecret, crcBundleClient, crcClusterClient)
+	manager := NewClusterManager(pullSecret, crcBundleClient, crcClusterClient)
 	if err := manager.Start(); err != nil {
 		return fmt.Errorf("unable to load initial configuration: %v", err)
 	}

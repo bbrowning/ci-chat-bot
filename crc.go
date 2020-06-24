@@ -22,17 +22,35 @@ import (
 // supportedParameters are the allowed parameter keys that can be passed to clusters
 var supportedParameters = []string{"persistent"}
 
-// stopCluster triggers cluster deletion. If this method returns nil, it
-// is safe to consider the cluster released.
-func (m *jobManager) stopCluster(name string) error {
-	if err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Delete(name, &metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+// stopCluster stops a cluster. If the cluster is not persistent or
+// the delete param is true, this also deletes it. If this method
+// returns nil, it is safe to consider the cluster released.
+func (m *clusterManager) stopCluster(name string, shouldDelete bool) error {
+	uns, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Get(name, metav1.GetOptions{})
+	if err != nil {
 		return err
+	}
+	var crcCluster crcv1alpha1.CrcCluster
+	if err := crc.UnstructuredToObject(uns, &crcCluster); err != nil {
+		return err
+	}
+	if crcCluster.Spec.Storage.Persistent && !shouldDelete {
+		crcCluster.Spec.Stopped = true
+		if _, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Update(crc.ObjectToUnstructured(&crcCluster), metav1.UpdateOptions{}); err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	} else {
+		if err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Delete(name, &metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+			return err
+		}
 	}
 	return nil
 }
 
-// newCluster creates a CrcCluster for running the provided cluster and exits.
-func (m *jobManager) newCluster(cluster *Job) error {
+// createOrUpdateCluster creates or updates a CrcCluster for running the
+// provided cluster and exits.
+func (m *clusterManager) createOrUpdateCrcCluster(cluster *Cluster) error {
+	fmt.Println("!!! createOrUpdateCluster")
 	if !m.tryClusterLaunch(cluster.Name) {
 		klog.Infof("Cluster %q already starting", cluster.Name)
 		return nil
@@ -58,6 +76,7 @@ func (m *jobManager) newCluster(cluster *Job) error {
 			"crc-cluster-bot.openshift.io/params":          paramsToString(cluster.Params),
 			"crc-cluster-bot.openshift.io/user":            cluster.RequestedBy,
 			"crc-cluster-bot.openshift.io/channel":         cluster.RequestedChannel,
+			"crc-cluster-bot.openshift.io/startedAt":       time.Now().UTC().Format(time.RFC3339),
 		},
 		Labels: map[string]string{
 			"crc-cluster-bot.openshift.io/launch": "true",
@@ -68,14 +87,30 @@ func (m *jobManager) newCluster(cluster *Job) error {
 	crcCluster.Annotations["crc-cluster-bot.openshift.io/expires"] = strconv.Itoa(int(m.maxAge.Seconds() + launchDeadline.Seconds()))
 
 	_, err = m.crcClusterClient.Namespace(m.crcClusterNamespace).Create(crc.ObjectToUnstructured(crcCluster), metav1.CreateOptions{})
-	if err != nil && !errors.IsAlreadyExists(err) {
+	if err != nil && errors.IsAlreadyExists(err) {
+		fmt.Println("!!! Updating cluster to start")
+		uns, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Get(cluster.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		var updatedCrcCluster crcv1alpha1.CrcCluster
+		if err := crc.UnstructuredToObject(uns, &updatedCrcCluster); err != nil {
+			return err
+		}
+		updatedCrcCluster.Annotations = crcCluster.Annotations
+		updatedCrcCluster.Spec.Stopped = false
+		if _, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Update(crc.ObjectToUnstructured(&updatedCrcCluster), metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		crcCluster = &updatedCrcCluster
+	} else {
 		return err
 	}
 
 	return nil
 }
 
-func (m *jobManager) waitForClusterLaunch(cluster *Job) error {
+func (m *clusterManager) waitForClusterLaunch(cluster *Cluster) error {
 	if cluster.IsComplete() && len(cluster.PasswordSnippet) > 0 {
 		return nil
 	}
@@ -102,7 +137,7 @@ func (m *jobManager) waitForClusterLaunch(cluster *Job) error {
 		return err
 	}
 
-	started := crcCluster.CreationTimestamp.Time
+	started := cluster.RequestedAt
 
 	if err := populateClusterCredentials(cluster, crcCluster); err != nil {
 		return err
@@ -115,7 +150,7 @@ func (m *jobManager) waitForClusterLaunch(cluster *Job) error {
 	return nil
 }
 
-func populateClusterCredentials(cluster *Job, crcCluster *crcv1alpha1.CrcCluster) error {
+func populateClusterCredentials(cluster *Cluster, crcCluster *crcv1alpha1.CrcCluster) error {
 	kubeconfigBytes, err := base64.StdEncoding.DecodeString(crcCluster.Status.Kubeconfig)
 	if err != nil {
 		return err
@@ -131,7 +166,7 @@ Log in to the console with user kubeadmin and password %s
 
 // clearNotificationAnnotations removes the channel notification annotations in case we crash,
 // so we don't attempt to redeliver, and set the best estimate we have of the expiration time if we created the cluster
-func (m *jobManager) clearNotificationAnnotations(cluster *Job, created bool, startDuration time.Duration) {
+func (m *clusterManager) clearNotificationAnnotations(cluster *Cluster, created bool, startDuration time.Duration) {
 	var patch []byte
 	if created {
 		patch = []byte(fmt.Sprintf(`{"metadata":{"annotations":{"crc-cluster-bot.openshift.io/channel":"","crc-cluster-bot.openshift.io/expires":"%d"}}}`, int(startDuration.Seconds()+m.maxAge.Seconds())))

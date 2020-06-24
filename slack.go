@@ -23,10 +23,10 @@ func NewBot(token string) *Bot {
 	}
 }
 
-func (b *Bot) Start(manager JobManager) error {
+func (b *Bot) Start(manager ClusterManager) error {
 	slack := slacker.NewClient(b.token)
 
-	manager.SetNotifier(b.jobResponder(slack))
+	manager.SetNotifier(b.clusterResponder(slack))
 
 	slack.DefaultCommand(func(request slacker.Request, response slacker.ResponseWriter) {
 		response.Reply("unrecognized command, msg me `help` for a list of all commands")
@@ -119,7 +119,7 @@ func (b *Bot) Start(manager JobManager) error {
 		},
 	})
 	slack.Command("done", &slacker.CommandDefinition{
-		Description: "Terminate the running cluster",
+		Description: "Stop the running cluster",
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User
 			channel := request.Event().Channel
@@ -127,7 +127,41 @@ func (b *Bot) Start(manager JobManager) error {
 				response.Reply("you must direct message me this request")
 				return
 			}
-			msg, err := manager.TerminateClusterForUser(user)
+			msg, err := manager.StopClusterForUser(user)
+			if err != nil {
+				response.Reply(err.Error())
+				return
+			}
+			response.Reply(msg)
+		},
+	})
+	slack.Command("resume", &slacker.CommandDefinition{
+		Description: "Resume a stopped cluster",
+		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
+			user := request.Event().User
+			channel := request.Event().Channel
+			if !isDirectMessage(channel) {
+				response.Reply("you must direct message me this request")
+				return
+			}
+			msg, err := manager.ResumeClusterForUser(user, channel)
+			if err != nil {
+				response.Reply(err.Error())
+				return
+			}
+			response.Reply(msg)
+		},
+	})
+	slack.Command("delete", &slacker.CommandDefinition{
+		Description: "Permanently delete a persistent cluster",
+		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
+			user := request.Event().User
+			channel := request.Event().Channel
+			if !isDirectMessage(channel) {
+				response.Reply("you must direct message me this request")
+				return
+			}
+			msg, err := manager.DeleteClusterForUser(user)
 			if err != nil {
 				response.Reply(err.Error())
 				return
@@ -145,13 +179,13 @@ func (b *Bot) Start(manager JobManager) error {
 				response.Reply("you must direct message me this request")
 				return
 			}
-			job, err := manager.GetLaunchCluster(user)
+			cluster, err := manager.GetLaunchCluster(user)
 			if err != nil {
 				response.Reply(err.Error())
 				return
 			}
-			job.RequestedChannel = channel
-			b.notifyCluster(slacker.NewResponse(request.Event(), slack.Client(), slack.RTM()), job)
+			cluster.RequestedChannel = channel
+			b.notifyCluster(slacker.NewResponse(request.Event(), slack.Client(), slack.RTM()), cluster)
 		},
 	})
 
@@ -166,21 +200,21 @@ func (b *Bot) Start(manager JobManager) error {
 	return slack.Listen(context.Background())
 }
 
-func (b *Bot) jobResponder(s *slacker.Slacker) func(Job) {
-	return func(job Job) {
-		if len(job.RequestedChannel) == 0 || len(job.RequestedBy) == 0 {
-			klog.Infof("job %q has no requested channel or user, can't notify", job.Name)
+func (b *Bot) clusterResponder(s *slacker.Slacker) func(Cluster) {
+	return func(cluster Cluster) {
+		if len(cluster.RequestedChannel) == 0 || len(cluster.RequestedBy) == 0 {
+			klog.Infof("cluster %q has no requested channel or user, can't notify", cluster.Name)
 			return
 		}
-		if len(job.Credentials) == 0 && len(job.Failure) == 0 {
+		if len(cluster.Credentials) == 0 && len(cluster.Failure) == 0 {
 			klog.Infof("no credentials or failure, still pending")
 			return
 		}
-		b.notifyCluster(slacker.NewResponse(&slack.MessageEvent{Msg: slack.Msg{Channel: job.RequestedChannel}}, s.Client(), s.RTM()), &job)
+		b.notifyCluster(slacker.NewResponse(&slack.MessageEvent{Msg: slack.Msg{Channel: cluster.RequestedChannel}}, s.Client(), s.RTM()), &cluster)
 	}
 }
 
-func (b *Bot) notifyCluster(response slacker.ResponseWriter, cluster *Job) {
+func (b *Bot) notifyCluster(response slacker.ResponseWriter, cluster *Cluster) {
 	switch {
 	case len(cluster.Failure) > 0:
 		response.Reply(fmt.Sprintf("your cluster failed to launch: %s", cluster.Failure))

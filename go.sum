@@ -91,6 +91,8 @@ github.com/aws/aws-sdk-go v1.25.48/go.mod h1:KmX6BPdI08NWTb3/sm4ZGu5ShLoqVDhKgpi
 github.com/baiyubin/aliyun-sts-go-sdk v0.0.0-20180326062324-cfa1a18b161f/go.mod h1:AuiFmCCPBSrqvVMvuqFuk0qogytodnVFVSN5CeJB8Gc=
 github.com/bbrowning/crc-operator v0.1.0 h1:6S3Dwegkk1bxWAklrHCLZpiP/Bs8vBDypkAxwdRW83M=
 github.com/bbrowning/crc-operator v0.1.0/go.mod h1:yRznsyoV1VMvjA4Fe5flDK75QlCobM3o6iaETSkp/X4=
+github.com/bbrowning/crc-operator v0.2.0 h1:V/WnwYcO75Ve9/efhkRn8OcvG6c/io/EPg2qJxKu1MI=
+github.com/bbrowning/crc-operator v0.2.0/go.mod h1:yRznsyoV1VMvjA4Fe5flDK75QlCobM3o6iaETSkp/X4=
 github.com/beorn7/perks v0.0.0-20160804104726-4c0e84591b9a/go.mod h1:Dwedo/Wpr24TaqPxmxbtue+5NUziq4I4S80YR8gNf3Q=
 github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24TaqPxmxbtue+5NUziq4I4S80YR8gNf3Q=
 github.com/beorn7/perks v1.0.0/go.mod h1:KWe93zE9D1o94FZ5RNwFwVgaQK1VOXiVxmqh+CedLV8=
