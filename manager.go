@@ -76,8 +76,6 @@ type Cluster struct {
 
 	Params map[string]string
 
-	Mode string
-
 	Bundle string
 
 	Credentials     string
@@ -108,6 +106,7 @@ type clusterManager struct {
 	clusterPrefix string
 	maxClusters   int
 	maxAge        time.Duration
+	maxStoppedAge time.Duration
 
 	pullSecret          string
 	crcBundleClient     dynamic.NamespaceableResourceInterface
@@ -134,7 +133,8 @@ func NewClusterManager(pullSecret string, crcBundleClient dynamic.NamespaceableR
 		clusters:      make(map[string]*Cluster),
 		clusterPrefix: "bot-",
 		maxClusters:   maxTotalClusters,
-		maxAge:        5 * time.Hour,
+		maxAge:        4 * time.Hour,
+		maxStoppedAge: 7 * 24 * time.Hour,
 
 		pullSecret:          pullSecret,
 		crcBundleClient:     crcBundleClient,
@@ -268,7 +268,9 @@ func (m *clusterManager) sync() error {
 				j.ExpiresAt = j.RequestedAt.Add(time.Duration(maxSeconds) * time.Second)
 			}
 		}
-		if j.ExpiresAt.IsZero() {
+		if j.Stopped && j.ExpiresAt.IsZero() {
+			j.ExpiresAt = j.RequestedAt.Add(m.maxStoppedAge)
+		} else if j.ExpiresAt.IsZero() {
 			j.ExpiresAt = j.RequestedAt.Add(m.maxAge)
 		}
 
@@ -406,7 +408,7 @@ func (m *clusterManager) ListClusters(users ...string) string {
 			case cluster.Complete:
 				fmt.Fprintf(buf, "• <@%s>%s%s - cluster has requested shut down%s\n", cluster.RequestedBy, bundle, options, details)
 			case len(cluster.Credentials) > 0:
-				fmt.Fprintf(buf, "• <@%s>%s%s - available and will be torn down in %d minutes%s\n", cluster.RequestedBy, bundle, options, int(cluster.ExpiresAt.Sub(now)/time.Minute), details)
+				fmt.Fprintf(buf, "• <@%s>%s%s - available and will be stopped in %d minutes%s\n", cluster.RequestedBy, bundle, options, int(cluster.ExpiresAt.Sub(now)/time.Minute), details)
 			case len(cluster.Failure) > 0:
 				fmt.Fprintf(buf, "• <@%s>%s%s - failure: %s%s\n", cluster.RequestedBy, bundle, options, cluster.Failure, details)
 			default:
@@ -430,7 +432,7 @@ func (m *clusterManager) ListClusters(users ...string) string {
 				options = fmt.Sprintf(" (%s)", s)
 			}
 
-			fmt.Fprintf(buf, "• <@%s>%s%s - cluster is stopped%s\n", cluster.RequestedBy, cluster.Bundle, options, details)
+			fmt.Fprintf(buf, "• <@%s>%s%s - cluster is stopped and will be deleted in %d minutes%s\n", cluster.RequestedBy, cluster.Bundle, options, int(cluster.ExpiresAt.Sub(now)/time.Minute), details)
 		}
 	}
 
@@ -671,7 +673,7 @@ func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user strin
 		delete(m.requests, user)
 		if cluster, ok := m.clusters[cluster]; ok {
 			cluster.Failure = fmt.Sprintf("%s requested", action)
-			cluster.ExpiresAt = time.Now().Add(5 * time.Minute)
+			cluster.ExpiresAt = cluster.RequestedAt.Add(m.maxStoppedAge)
 			cluster.Complete = true
 			cluster.Stopped = true
 		}
@@ -720,6 +722,11 @@ func (m *clusterManager) ResumeClusterForUser(user string, channel string) (stri
 	cluster.RequestedChannel = channel
 	cluster.RequestedAt = req.RequestedAt
 	cluster.ExpiresAt = req.RequestedAt.Add(m.maxAge)
+	cluster.Stopped = false
+	cluster.Complete = false
+	cluster.Failure = ""
+	cluster.Credentials = ""
+	cluster.PasswordSnippet = ""
 	klog.Infof("Cluster %q requested resume by user %q", cluster.Name, req.User)
 
 	msg, err := m.startCluster(cluster, req)

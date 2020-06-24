@@ -38,7 +38,7 @@ func (b *Bot) Start(manager ClusterManager) error {
 	}
 	slack.Command("launch <bundle> <options>", &slacker.CommandDefinition{
 		Description: fmt.Sprintf(
-			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations limited to 'persistent' today that will enable persistence for your cluster, allowing it to survive stops and starts.", strings.Join(validBundles, ", ")),
+			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations limited to 'persistent' today that will enable persistence for your cluster, allowing it to survive stops and starts. Persistent clusters take about twice as long to come up the first time as ephemeral clusters.", strings.Join(validBundles, ", ")),
 		Example: fmt.Sprintf("launch %s persistent", validBundles[len(validBundles)-1]),
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User
@@ -126,7 +126,7 @@ func (b *Bot) Start(manager ClusterManager) error {
 			response.Reply(msg)
 		},
 	})
-	slack.Command("done", &slacker.CommandDefinition{
+	stopCommand := &slacker.CommandDefinition{
 		Description: "Stop the running cluster",
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User
@@ -142,7 +142,9 @@ func (b *Bot) Start(manager ClusterManager) error {
 			}
 			response.Reply(msg)
 		},
-	})
+	}
+	slack.Command("done", stopCommand)
+	slack.Command("stop", stopCommand)
 	slack.Command("resume", &slacker.CommandDefinition{
 		Description: "Resume a stopped cluster",
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
