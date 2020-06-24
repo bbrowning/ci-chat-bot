@@ -657,7 +657,8 @@ func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user strin
 	if shouldDelete {
 		action = "delete"
 	}
-	if err := m.stopCluster(cluster, shouldDelete); err != nil {
+	deleted, err := m.stopCluster(cluster, shouldDelete)
+	if err != nil {
 		klog.Errorf("unable to %s running cluster %s: %v", action, cluster, err)
 		return fmt.Errorf("unable to %s cluster", action)
 	}
@@ -673,7 +674,11 @@ func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user strin
 		delete(m.requests, user)
 		if cluster, ok := m.clusters[cluster]; ok {
 			cluster.Failure = fmt.Sprintf("%s requested", action)
-			cluster.ExpiresAt = cluster.RequestedAt.Add(m.maxStoppedAge)
+			if deleted {
+				cluster.ExpiresAt = time.Now().Add(5 * time.Minute)
+			} else {
+				cluster.ExpiresAt = cluster.RequestedAt.Add(m.maxStoppedAge)
+			}
 			cluster.Complete = true
 			cluster.Stopped = true
 		}

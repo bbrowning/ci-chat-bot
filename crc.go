@@ -25,27 +25,29 @@ var supportedParameters = []string{"persistent"}
 // stopCluster stops a cluster. If the cluster is not persistent or
 // the delete param is true, this also deletes it. If this method
 // returns nil, it is safe to consider the cluster released.
-func (m *clusterManager) stopCluster(name string, shouldDelete bool) error {
+func (m *clusterManager) stopCluster(name string, shouldDelete bool) (bool, error) {
 	uns, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Get(name, metav1.GetOptions{})
 	if err != nil {
-		return err
+		return false, err
 	}
 	var crcCluster crcv1alpha1.CrcCluster
 	if err := crc.UnstructuredToObject(uns, &crcCluster); err != nil {
-		return err
+		return false, err
 	}
+	deleted := false
 	if crcCluster.Spec.Storage.Persistent && !shouldDelete {
 		crcCluster.Spec.Stopped = true
 		crcCluster.Annotations["crc-cluster-bot.openshift.io/expires"] = strconv.Itoa(int(m.maxStoppedAge.Seconds()))
 		if _, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Update(crc.ObjectToUnstructured(&crcCluster), metav1.UpdateOptions{}); err != nil && !errors.IsNotFound(err) {
-			return err
+			return false, err
 		}
 	} else {
 		if err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Delete(name, &metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
-			return err
+			return false, err
 		}
+		deleted = true
 	}
-	return nil
+	return deleted, nil
 }
 
 // createOrUpdateCluster creates or updates a CrcCluster for running the
