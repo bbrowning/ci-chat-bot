@@ -50,7 +50,6 @@ func (m *clusterManager) stopCluster(name string, shouldDelete bool) error {
 // createOrUpdateCluster creates or updates a CrcCluster for running the
 // provided cluster and exits.
 func (m *clusterManager) createOrUpdateCrcCluster(cluster *Cluster) error {
-	fmt.Println("!!! createOrUpdateCluster")
 	if !m.tryClusterLaunch(cluster.Name) {
 		klog.Infof("Cluster %q already starting", cluster.Name)
 		return nil
@@ -88,7 +87,6 @@ func (m *clusterManager) createOrUpdateCrcCluster(cluster *Cluster) error {
 
 	_, err = m.crcClusterClient.Namespace(m.crcClusterNamespace).Create(crc.ObjectToUnstructured(crcCluster), metav1.CreateOptions{})
 	if err != nil && errors.IsAlreadyExists(err) {
-		fmt.Println("!!! Updating cluster to start")
 		uns, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Get(cluster.Name, metav1.GetOptions{})
 		if err != nil {
 			return err
