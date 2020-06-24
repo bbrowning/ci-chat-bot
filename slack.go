@@ -53,9 +53,17 @@ func (b *Bot) Start(manager ClusterManager) error {
 				response.Reply(err.Error())
 				return
 			}
-			// Default to the most recent available bundle
-			if bundle == "" {
-				bundle = validBundles[len(validBundles)-1]
+
+			validBundle := false
+			for _, b := range validBundles {
+				if bundle == b {
+					validBundle = true
+					break
+				}
+			}
+			if !validBundle {
+				response.Reply(fmt.Sprintf("you must select a valid CRC bundle to launch - valid bundles are %s", strings.Join(validBundles, ", ")))
+				return
 			}
 
 			params, err := parseOptions(request.StringParam("options", ""))
