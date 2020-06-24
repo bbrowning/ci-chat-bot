@@ -292,8 +292,10 @@ func (m *clusterManager) sync() error {
 		}
 
 		m.clusters[cluster.Name] = j
-		if previous == nil || previous.Ready != j.Ready || !previous.IsComplete() {
-			go m.handleClusterStartup(*j, "sync")
+		if !j.Stopped {
+			if previous == nil || previous.Ready != j.Ready || !previous.IsComplete() {
+				go m.handleClusterStartup(*j, "sync")
+			}
 		}
 	}
 
