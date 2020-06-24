@@ -3,7 +3,7 @@ module github.com/bbrowning/crc-cluster-bot
 go 1.13
 
 require (
-	github.com/bbrowning/crc-operator v0.2.0
+	github.com/bbrowning/crc-operator v0.3.0
 	github.com/docker/spdystream v0.0.0-20181023171402-6480d4af844c // indirect
 	github.com/elazarl/goproxy v0.0.0-20200315184450-1f3cb6622dad // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect

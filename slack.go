@@ -38,7 +38,10 @@ func (b *Bot) Start(manager ClusterManager) error {
 	}
 	slack.Command("launch <bundle> <options>", &slacker.CommandDefinition{
 		Description: fmt.Sprintf(
-			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations limited to 'persistent' today that will enable persistence for your cluster, allowing it to survive stops and starts. Persistent clusters take about twice as long to come up the first time as ephemeral clusters.", strings.Join(validBundles, ", ")),
+			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations (%s). `persistent` will enable persistence for your cluster, allowing it to survive stops and starts. Persistent clusters take about twice as long to come up the first time as ephemeral clusters. `no-monitoring` will disable the cluster monitoring stack to give more free resources in the cluster for your workloads at the cost of breaking anything that uses monitoring.",
+			strings.Join(validBundles, ", "),
+			strings.Join(codeSlice(supportedParameters), ", "),
+		),
 		Example: fmt.Sprintf("launch %s persistent", validBundles[len(validBundles)-1]),
 		Handler: func(request slacker.Request, response slacker.ResponseWriter) {
 			user := request.Event().User

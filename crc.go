@@ -20,7 +20,7 @@ import (
 )
 
 // supportedParameters are the allowed parameter keys that can be passed to clusters
-var supportedParameters = []string{"persistent"}
+var supportedParameters = []string{"persistent", "no-monitoring"}
 
 // stopCluster stops a cluster. If the cluster is not persistent or
 // the delete param is true, this also deletes it. If this method

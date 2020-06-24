@@ -22,6 +22,7 @@ func ClusterForConfig(bundleName string, pullSecret string, params map[string]st
 		},
 	}
 
+	enableMonitoring := true
 	for opt := range params {
 		switch {
 		case opt == "persistent":
@@ -29,10 +30,13 @@ func ClusterForConfig(bundleName string, pullSecret string, params map[string]st
 				Persistent: true,
 				Size:       "50Gi",
 			}
+		case opt == "no-monitoring":
+			enableMonitoring = false
 		default:
 			// ignore
 		}
 	}
+	crc.Spec.EnableMonitoring = &enableMonitoring
 	crc = crc.DeepCopy()
 	return crc, nil
 }

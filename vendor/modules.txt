@@ -1,4 +1,4 @@
-# github.com/bbrowning/crc-operator v0.2.0
+# github.com/bbrowning/crc-operator v0.3.0
 github.com/bbrowning/crc-operator/pkg/apis/crc/v1alpha1
 # github.com/davecgh/go-spew v1.1.1
 github.com/davecgh/go-spew/spew
