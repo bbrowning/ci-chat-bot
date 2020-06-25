@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -40,6 +41,15 @@ func run() error {
 		return fmt.Errorf("the environment variable OPENSHIFT_PULL_SECRET must be set")
 	}
 
+	maxClustersString := os.Getenv("MAX_CLUSTERS")
+	if len(maxClustersString) == 0 {
+		return fmt.Errorf("the environment variable MAX_CLUSTERS must be set")
+	}
+	maxClusters, err := strconv.Atoi(maxClustersString)
+	if err != nil || maxClusters <= 0 {
+		return fmt.Errorf("the environment variable MAX_CLUSTERS must be set to an integer greater than 0")
+	}
+
 	crcKubeconfig, _, _, err := loadKubeconfig()
 	if err != nil {
 		return err
@@ -51,7 +61,7 @@ func run() error {
 	crcBundleClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "crc.developer.openshift.io", Version: "v1alpha1", Resource: "crcbundles"})
 	crcClusterClient := dynamicClient.Resource(schema.GroupVersionResource{Group: "crc.developer.openshift.io", Version: "v1alpha1", Resource: "crcclusters"})
 
-	manager := NewClusterManager(pullSecret, crcBundleClient, crcClusterClient)
+	manager := NewClusterManager(pullSecret, maxClusters, crcBundleClient, crcClusterClient)
 	if err := manager.Start(); err != nil {
 		return fmt.Errorf("unable to load initial configuration: %v", err)
 	}

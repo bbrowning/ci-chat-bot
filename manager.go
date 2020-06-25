@@ -19,12 +19,6 @@ import (
 	"k8s.io/klog"
 )
 
-const (
-	// maxTotalClusters limits the number of simultaneous clusters across all users to
-	// prevent saturating the infrastructure account.
-	maxTotalClusters = 3
-)
-
 // ClusterRequest keeps information about the request a user made to create
 // a cluster. This is reconstructable from a CrcCluster.
 type ClusterRequest struct {
@@ -128,12 +122,12 @@ type clusterManager struct {
 // CrcClusters. It attempts to recreate state on startup by querying
 // the cluster, but does not guarantee that some notifications to
 // users may not be sent or may be sent twice.
-func NewClusterManager(pullSecret string, crcBundleClient dynamic.NamespaceableResourceInterface, crcClusterClient dynamic.NamespaceableResourceInterface) *clusterManager {
+func NewClusterManager(pullSecret string, maxClusters int, crcBundleClient dynamic.NamespaceableResourceInterface, crcClusterClient dynamic.NamespaceableResourceInterface) *clusterManager {
 	m := &clusterManager{
 		requests:      make(map[string]*ClusterRequest),
 		clusters:      make(map[string]*Cluster),
 		clusterPrefix: "bot-",
-		maxClusters:   maxTotalClusters,
+		maxClusters:   maxClusters,
 		maxAge:        4 * time.Hour,
 		maxStoppedAge: 7 * 24 * time.Hour,
 
