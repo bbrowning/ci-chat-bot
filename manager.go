@@ -301,10 +301,12 @@ func (m *clusterManager) sync() error {
 
 	// actually stop too old clusters
 	for _, cluster := range clustersToStop {
-		if err := m.stopClusterAndReleaseRequest(cluster.Name, cluster.RequestedBy, false); err != nil {
-			klog.Errorf("unable to stop running cluster %s: %v", cluster.Name, err)
-			return err
-		}
+		go func(name string, user string) {
+			if err := m.stopClusterAndReleaseRequest(name, user, false); err != nil {
+				klog.Errorf("unable to stop running cluster %s: %v", name, err)
+
+			}
+		}(cluster.Name, cluster.RequestedBy)
 	}
 
 	// forget everything that is too old
