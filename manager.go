@@ -102,6 +102,7 @@ type clusterManager struct {
 	stopped              map[string]*Cluster
 	started              time.Time
 	recentStartEstimates []time.Duration
+	bundles              []string
 
 	clusterPrefix string
 	maxClusters   int
@@ -229,6 +230,21 @@ func (m *clusterManager) sync() error {
 		m.started = now
 	}
 
+	// Update the list of available bundles
+	m.bundles = []string{}
+	u, err = m.crcBundleClient.Namespace(m.crcBundleNamespace).List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	bundleList := &crcv1alpha1.CrcBundleList{}
+	if err := crc.UnstructuredToObject(u, bundleList); err != nil {
+		return err
+	}
+	for _, bundle := range bundleList.Items {
+		m.bundles = append(m.bundles, bundle.Name)
+	}
+
+	// Update the running/stopped clusters
 	var clustersToStop []*Cluster
 	for _, cluster := range list.Items {
 		klog.Infof("Found cluster: %s", cluster.Name)
@@ -495,19 +511,24 @@ Bundle %s:
 }
 
 func (m *clusterManager) ListBundles() ([]string, error) {
-	var bundles []string
-	u, err := m.crcBundleClient.Namespace(m.crcBundleNamespace).List(metav1.ListOptions{})
-	if err != nil {
-		return bundles, fmt.Errorf("could not list bundles: %v", err)
+	if len(m.bundles) == 0 {
+		m.lock.Lock()
+		defer m.lock.Unlock()
+
+		m.bundles = []string{}
+		u, err := m.crcBundleClient.Namespace(m.crcBundleNamespace).List(metav1.ListOptions{})
+		if err != nil {
+			return m.bundles, err
+		}
+		bundleList := &crcv1alpha1.CrcBundleList{}
+		if err := crc.UnstructuredToObject(u, bundleList); err != nil {
+			return m.bundles, err
+		}
+		for _, bundle := range bundleList.Items {
+			m.bundles = append(m.bundles, bundle.Name)
+		}
 	}
-	bundleList := &crcv1alpha1.CrcBundleList{}
-	if err := crc.UnstructuredToObject(u, bundleList); err != nil {
-		return bundles, err
-	}
-	for _, bundle := range bundleList.Items {
-		bundles = append(bundles, bundle.Name)
-	}
-	return bundles, nil
+	return m.bundles, nil
 }
 
 func (m *clusterManager) resolveToCluster(req *ClusterRequest) (*Cluster, error) {

@@ -38,8 +38,8 @@ func (b *Bot) Start(manager ClusterManager) error {
 	}
 	slack.Command("launch <bundle> <options>", &slacker.CommandDefinition{
 		Description: fmt.Sprintf(
-			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles are %s. Options is a comma-delimited list of variations (%s). `persistent` will enable persistence for your cluster, allowing it to survive stops and starts. Persistent clusters take about twice as long to come up the first time as ephemeral clusters. `no-monitoring` will disable the cluster monitoring stack to give more free resources in the cluster for your workloads at the cost of breaking anything that uses monitoring.",
-			strings.Join(validBundles, ", "),
+			"Launch a single node OpenShift cluster using CodeReady Containers from the specified bundle. Valid bundles include %s. Options is a comma-delimited list of variations (%s). `persistent` will enable persistence for your cluster, allowing it to survive stops and starts. Persistent clusters take about twice as long to come up the first time as ephemeral clusters. `no-monitoring` will disable the cluster monitoring stack to give more free resources in the cluster for your workloads at the cost of breaking anything that uses monitoring.",
+			strings.Join(codeSlice(validBundles), ", "),
 			strings.Join(codeSlice(supportedParameters), ", "),
 		),
 		Example: fmt.Sprintf("launch %s persistent", validBundles[len(validBundles)-1]),
@@ -57,6 +57,13 @@ func (b *Bot) Start(manager ClusterManager) error {
 				return
 			}
 
+			// ListBundles here again to pick up any updates since the
+			// bot started
+			validBundles, err := manager.ListBundles()
+			if err != nil {
+				response.Reply(err.Error())
+				return
+			}
 			validBundle := false
 			for _, b := range validBundles {
 				if bundle == b {
@@ -65,7 +72,7 @@ func (b *Bot) Start(manager ClusterManager) error {
 				}
 			}
 			if !validBundle {
-				response.Reply(fmt.Sprintf("you must select a valid CRC bundle to launch - valid bundles are %s", strings.Join(validBundles, ", ")))
+				response.Reply(fmt.Sprintf("you must select a valid CRC bundle to launch - valid bundles are %s", strings.Join(codeSlice(validBundles), ", ")))
 				return
 			}
 
