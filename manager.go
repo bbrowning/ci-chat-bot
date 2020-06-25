@@ -723,6 +723,9 @@ func (m *clusterManager) ResumeClusterForUser(user string, channel string) (stri
 			break
 		}
 	}
+	if cluster == nil {
+		return "", fmt.Errorf("no stopped cluster found to resume - if you just stopped the cluster, wait a few minutes and try again")
+	}
 	req := requestFromCluster(cluster)
 	req.Channel = channel
 	req.RequestedAt = time.Now()
