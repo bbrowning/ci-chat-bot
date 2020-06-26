@@ -592,7 +592,7 @@ func (m *clusterManager) startCluster(cluster *Cluster, req *ClusterRequest) (st
 			klog.Infof("user %q is will have to wait", user)
 			var waitUntil time.Time
 			for _, c := range m.clusters {
-				if c == nil {
+				if c == nil || c.Stopped {
 					continue
 				}
 				if waitUntil.Before(c.ExpiresAt) {
@@ -605,6 +605,7 @@ func (m *clusterManager) startCluster(cluster *Cluster, req *ClusterRequest) (st
 			}
 			return "", fmt.Errorf("no clusters are currently available, next slot available in %d minutes", int(math.Ceil(minutes)))
 		}
+		cluster.Stopped = false
 		m.clusters[cluster.Name] = cluster
 		klog.Infof("Cluster %q starting for %q", cluster.Name, user)
 		return "", nil
@@ -758,7 +759,6 @@ func (m *clusterManager) ResumeClusterForUser(user string, channel string) (stri
 	cluster.RequestedChannel = channel
 	cluster.RequestedAt = req.RequestedAt
 	cluster.ExpiresAt = req.RequestedAt.Add(m.maxAge)
-	cluster.Stopped = false
 	cluster.Complete = false
 	cluster.Failure = ""
 	cluster.Credentials = ""
