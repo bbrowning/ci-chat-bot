@@ -702,16 +702,16 @@ func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user strin
 			return fmt.Errorf("another cluster was launched while trying to %s this cluster", action)
 		}
 		delete(m.requests, user)
-		if cluster, ok := m.clusters[cluster]; ok {
-			cluster.Failure = fmt.Sprintf("%s requested", action)
-			if deleted {
-				cluster.ExpiresAt = time.Now().Add(5 * time.Minute)
-			} else {
-				cluster.ExpiresAt = cluster.RequestedAt.Add(m.maxStoppedAge)
-			}
-			cluster.Complete = true
-			cluster.Stopped = true
+	}
+	if cluster, ok := m.clusters[cluster]; ok {
+		cluster.Failure = fmt.Sprintf("%s requested", action)
+		if deleted {
+			cluster.ExpiresAt = time.Now().Add(5 * time.Minute)
+		} else {
+			cluster.ExpiresAt = cluster.RequestedAt.Add(m.maxStoppedAge)
 		}
+		cluster.Complete = true
+		cluster.Stopped = true
 	}
 	return nil
 }
