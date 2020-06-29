@@ -691,6 +691,7 @@ func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user strin
 		klog.Errorf("unable to %s running cluster %s: %v", action, cluster, err)
 		return fmt.Errorf("unable to %s cluster", action)
 	}
+	m.finishClusterLaunch(cluster)
 
 	if len(user) > 0 {
 		// mark the cluster as failed, clear the request, and allow the user to launch again
