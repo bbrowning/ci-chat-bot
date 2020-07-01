@@ -314,6 +314,9 @@ func (m *clusterManager) sync() error {
 		klog.Infof("cluster %q is expired", cluster.Name)
 		go func(name string, user string) {
 			klog.Infof("stopping cluster %q", cluster.Name)
+			if cluster.Stopped {
+				klog.Infof("cluster %q is already stopped but expired - this should permanently delete the cluster?", cluster.Name)
+			}
 			if err := m.stopClusterAndReleaseRequest(name, user, false); err != nil {
 				klog.Errorf("unable to stop running cluster %s: %v", name, err)
 
