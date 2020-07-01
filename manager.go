@@ -693,10 +693,10 @@ func (m *clusterManager) stopClusterAndReleaseRequest(cluster string, user strin
 	}
 	m.finishClusterLaunch(cluster)
 
+	m.lock.Lock()
+	defer m.lock.Unlock()
 	if len(user) > 0 {
 		// mark the cluster as failed, clear the request, and allow the user to launch again
-		m.lock.Lock()
-		defer m.lock.Unlock()
 		existing, ok := m.requests[user]
 		if ok && existing.Name != cluster {
 			return fmt.Errorf("another cluster was launched while trying to %s this cluster", action)
