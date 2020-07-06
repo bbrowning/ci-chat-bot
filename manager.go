@@ -411,6 +411,15 @@ func (m *clusterManager) ListClusters(users ...string) string {
 		}
 		return false
 	})
+	sort.Slice(stoppedClusters, func(i, j int) bool {
+		if stoppedClusters[i].RequestedAt.Before(stoppedClusters[j].RequestedAt) {
+			return true
+		}
+		if stoppedClusters[i].Name < stoppedClusters[j].Name {
+			return true
+		}
+		return false
+	})
 
 	buf := &bytes.Buffer{}
 	now := time.Now()
