@@ -399,7 +399,9 @@ func (m *clusterManager) ListClusters(users ...string) string {
 			stoppedClusters = append(stoppedClusters, cluster)
 		} else {
 			clusters = append(clusters, cluster)
-			runningClusters++
+			if len(cluster.Failure) == 0 && !cluster.Complete {
+				runningClusters++
+			}
 		}
 	}
 	sort.Slice(clusters, func(i, j int) bool {
