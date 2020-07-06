@@ -129,7 +129,7 @@ func NewClusterManager(pullSecret string, maxClusters int, crcBundleClient dynam
 		clusterPrefix: "bot-",
 		maxClusters:   maxClusters,
 		maxAge:        4 * time.Hour,
-		maxStoppedAge: 7 * 24 * time.Hour,
+		maxStoppedAge: 14 * 24 * time.Hour,
 
 		pullSecret:          pullSecret,
 		crcBundleClient:     crcBundleClient,
