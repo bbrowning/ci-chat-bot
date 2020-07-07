@@ -744,7 +744,7 @@ func (m *clusterManager) DeleteClusterForUser(user string) (string, error) {
 	if err := m.stopClusterAndReleaseRequest(name, user, true); err != nil {
 		return "", err
 	}
-	return "the cluster was flagged for deletion, you may now launch another", nil
+	return "the cluster was flagged for deletion, you may launch another in a few minutes", nil
 }
 
 func (m *clusterManager) StopClusterForUser(user string) (string, error) {
@@ -756,7 +756,7 @@ func (m *clusterManager) StopClusterForUser(user string) (string, error) {
 	if err := m.stopClusterAndReleaseRequest(name, user, false); err != nil {
 		return "", err
 	}
-	return "the cluster was flagged for shutdown, you may now launch another", nil
+	return "the cluster was flagged for shutdown, you may launch another in a few minutes", nil
 }
 
 func (m *clusterManager) ResumeClusterForUser(user string, channel string) (string, error) {
