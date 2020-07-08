@@ -312,9 +312,9 @@ func (m *clusterManager) sync() error {
 	// actually stop too old clusters
 	for _, cluster := range clustersToStop {
 		klog.Infof("cluster %q is expired", cluster.Name)
-		go func(name string, user string) {
+		go func(name string, user string, stopped bool) {
 			klog.Infof("stopping cluster %q", cluster.Name)
-			if cluster.Stopped {
+			if stopped {
 				if err := m.stopClusterAndReleaseRequest(name, user, true); err != nil {
 					klog.Errorf("unable to delete stopped cluster %s: %v", name, err)
 				}
@@ -323,7 +323,7 @@ func (m *clusterManager) sync() error {
 					klog.Errorf("unable to stop running cluster %s: %v", name, err)
 				}
 			}
-		}(cluster.Name, cluster.RequestedBy)
+		}(cluster.Name, cluster.RequestedBy, cluster.Stopped)
 	}
 
 	// forget everything that is too old
