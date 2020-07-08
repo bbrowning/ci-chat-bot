@@ -596,8 +596,6 @@ func (m *clusterManager) startCluster(cluster *Cluster, req *ClusterRequest) (st
 			}
 		}
 
-		m.requests[user] = req
-
 		launchedClusters := 0
 		for _, cluster := range m.clusters {
 			if cluster != nil && !cluster.Complete && !cluster.Stopped && len(cluster.Failure) == 0 {
@@ -621,6 +619,8 @@ func (m *clusterManager) startCluster(cluster *Cluster, req *ClusterRequest) (st
 			}
 			return "", fmt.Errorf("no clusters are currently available, next slot available in %d minutes", int(math.Ceil(minutes)))
 		}
+
+		m.requests[user] = req
 		cluster.Stopped = false
 		m.clusters[cluster.Name] = cluster
 		klog.Infof("Cluster %q starting for %q", cluster.Name, user)
