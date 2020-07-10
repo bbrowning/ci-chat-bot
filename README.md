@@ -17,7 +17,7 @@ make build
 ## Releasing
 
 ```
-make release RELEASE_VERSION=0.0.18 RELEASE_REGISTRY=quay.io/bbrowning/crc-cluster-bot
+make release RELEASE_VERSION=0.0.19 RELEASE_REGISTRY=quay.io/bbrowning/crc-cluster-bot
 ```
 
 ## Deploying to a cluster
@@ -39,5 +39,5 @@ oc create secret generic -n crc-cluster-bot crc-cluster-bot --from-literal=botTo
 Finally, deploy the bot:
 
 ```
-cat deploy/deployment.yaml | sed -e "s|REPLACE_IMAGE|quay.io/bbrowning/crc-cluster-bot:v0.0.18|g" | oc apply -f -
+cat deploy/deployment.yaml | sed -e "s|REPLACE_IMAGE|quay.io/bbrowning/crc-cluster-bot:v0.0.19|g" | oc apply -f -
 ```

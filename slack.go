@@ -33,7 +33,7 @@ func (b *Bot) Start(manager ClusterManager) error {
 	})
 
 	slack.Help(&slacker.CommandDefinition{
-		Description: "help - join `#forum-crc-clusters` to report issues or ask questions",
+		Description: "help - join `#forum-crc-cluster-bot` to report issues or ask questions",
 	})
 
 	validBundles, err := manager.ListBundles()
