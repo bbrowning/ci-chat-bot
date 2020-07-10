@@ -405,19 +405,16 @@ func (m *clusterManager) ListClusters(users ...string) string {
 		}
 	}
 	sort.Slice(clusters, func(i, j int) bool {
-		if clusters[i].RequestedAt.Before(clusters[j].RequestedAt) {
-			return true
+		if clusters[i].ExpiresAt.Equal(clusters[j].ExpiresAt) {
+			return clusters[i].Name < clusters[j].Name
 		}
-		if clusters[i].Name < clusters[j].Name {
-			return true
-		}
-		return false
+		return clusters[i].ExpiresAt.Before(clusters[j].ExpiresAt)
 	})
 	sort.Slice(stoppedClusters, func(i, j int) bool {
-		if stoppedClusters[i].Name < stoppedClusters[j].Name {
-			return true
+		if stoppedClusters[i].ExpiresAt.Equal(stoppedClusters[j].ExpiresAt) {
+			return stoppedClusters[i].Name < stoppedClusters[j].Name
 		}
-		return false
+		return stoppedClusters[i].ExpiresAt.Before(stoppedClusters[j].ExpiresAt)
 	})
 
 	buf := &bytes.Buffer{}
