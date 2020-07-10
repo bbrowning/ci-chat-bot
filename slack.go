@@ -32,6 +32,10 @@ func (b *Bot) Start(manager ClusterManager) error {
 		response.Reply("unrecognized command, msg me `help` for a list of all commands")
 	})
 
+	slack.Help(&slacker.CommandDefinition{
+		Description: "help - join `#forum-crc-clusters` to report issues or ask questions",
+	})
+
 	validBundles, err := manager.ListBundles()
 	if err != nil {
 		return err
