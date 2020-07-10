@@ -63,7 +63,7 @@ func (m *clusterManager) createOrUpdateCrcCluster(cluster *Cluster) error {
 		return nil
 	}
 
-	launchDeadline := 20 * time.Minute
+	launchDeadline := 30 * time.Minute
 
 	crcCluster, err := crc.ClusterForConfig(cluster.Bundle, m.pullSecret, cluster.Params)
 	if err != nil {
@@ -118,7 +118,7 @@ func (m *clusterManager) waitForClusterLaunch(cluster *Cluster) error {
 
 	klog.Infof("Waiting for cluster %q to launch in namespace %s", cluster.Name, m.crcClusterNamespace)
 	var crcCluster *crcv1alpha1.CrcCluster
-	err := wait.PollImmediate(30*time.Second, 30*time.Minute, func() (bool, error) {
+	err := wait.PollImmediate(30*time.Second, 40*time.Minute, func() (bool, error) {
 		uns, err := m.crcClusterClient.Namespace(m.crcClusterNamespace).Get(cluster.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
