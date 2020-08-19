@@ -160,8 +160,7 @@ func populateClusterCredentials(cluster *Cluster, crcCluster *crcv1alpha1.CrcClu
 	cluster.PasswordSnippet = fmt.Sprintf(`
 To access the cluster as the system:admin user when using 'oc', run 'export KUBECONFIG=/tmp/artifacts/installer/auth/kubeconfig'
 Access the OpenShift web-console here: %s
-Log in to the console with user kubeadmin and password %s
-`, crcCluster.Status.ConsoleURL, crcCluster.Status.KubeAdminPassword)
+Log in to the console with user `+"`kubeadmin` and password `%s`\n", crcCluster.Status.ConsoleURL, crcCluster.Status.KubeAdminPassword)
 	return nil
 }
 
